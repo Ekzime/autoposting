@@ -119,7 +119,7 @@ async def main():
     await client.start()
     
     # пример использования парсера:
-    await parse_messages("https://t.me/incrypted", limit=50)
+    await parse_messages("https://t.me/incrypted", limit=10)
     for message in get_all_messages():
         print(message)
 

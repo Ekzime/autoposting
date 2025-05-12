@@ -33,7 +33,11 @@ def add_message(channel_id, message_id, text, date, photo_path, links, views) ->
         messages = connection.scalars(select(Messages)).all()
         return sorted(messages, key=lambda x: x.date)
 
-
+def get_all_messages() -> list[Messages]:
+    with Session(engine) as session:
+        messages = session.scalars(select(Messages)).all()
+        return sorted(messages, key=lambda x: x.date)
+    
 def get_messages_by_channel(channel: Channel) -> list[Messages]:
     if not isinstance(channel, Channel):
         raise TypeError(f"channel: {channel} must be 'Channel' type")
