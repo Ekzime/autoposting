@@ -8,6 +8,7 @@ __pycache__/
 
 *.session
 photos/
+*.session-journal
 # Distribution / packaging
 .Python
 build/
