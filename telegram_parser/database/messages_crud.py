@@ -2,11 +2,12 @@
 import re
 from sqlalchemy import select, Select, and_, delete
 from sqlalchemy.orm import Session
-from database.alchemy_db import engine, Messages
+from .alchemy_db import engine, Messages
 from datetime import datetime
 from telethon.types import Channel
 from telethon.types import Message
-from telegram_requests import get_message_views
+from ..telegram_requests import get_message_views
+
 
 
 
@@ -33,7 +34,24 @@ def add_message(channel_id, message_id, text, date, photo_path, links, views) ->
         messages = connection.scalars(select(Messages)).all()
         return sorted(messages, key=lambda x: x.date)
 
-
+def get_all_messages() -> list[Messages]:
+    with Session(engine) as session:
+        messages = session.scalars(select(Messages)).all()
+        result = []
+        for m in messages:
+            result.append({
+                "id":           m.id,
+                "channel_id":   m.channel_id,
+                "message_id":   m.message_id,
+                "text":         m.text,
+                "length":       m.length,
+                "date":         m.date.isoformat(),  # или m.date.timestamp()
+                "photo_path":   m.photo_path,
+                "links":        m.links,
+                "views":        m.views,
+            })
+        return result
+    
 def get_messages_by_channel(channel: Channel) -> list[Messages]:
     if not isinstance(channel, Channel):
         raise TypeError(f"channel: {channel} must be 'Channel' type")
