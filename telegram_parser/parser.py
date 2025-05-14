@@ -21,7 +21,7 @@ from datetime import datetime
 
 from config import *
 
-from telegram_requests import get_message_views
+from .telegram_requests import get_message_views
 
 
 
