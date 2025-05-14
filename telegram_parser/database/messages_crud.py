@@ -9,6 +9,17 @@ from telethon.types import Channel
 
 def add_message(channel_id, message_id, text, date, photo_path, links, views) -> None:
     with Session(engine) as connection:
+        query = select(Messages).where(
+            and_(
+                Messages.channel_id == channel_id,
+                Messages.message_id == message_id
+            )
+        )
+        result = connection.execute(query).first()
+        if result:
+            print(f"message: id:{message_id} already exist")
+            return
+        
         connection.add(
             Messages(
                 channel_id = channel_id,

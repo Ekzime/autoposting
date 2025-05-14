@@ -16,7 +16,7 @@ from telethon.events import NewMessage
 from telethon.types import Channel, Message
 from telethon.tl.types import Channel, Message
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, MessageViews
-
+ 
 from datetime import datetime
 from config import *
 from telegram_requests import get_message_views
@@ -67,14 +67,13 @@ async def parse_messages(channel_id: int | str, limit: int=None):
     
     target_entity = await client.get_entity(channel_id)
     
-    count = 1
-    async for message in client.iter_messages(target_entity):
+    async for index, message in enumerate(client.iter_messages(target_entity)):
         message: Message = message # определяем правильный тип (почему то вс код не отобраает поля обьекта message без явного определения)
         
-        if (limit and count == limit): break # если достигнут лимит(глубина) парсинга прекращаем цикл
+        if (limit and index == limit): break # если достигнут лимит(глубина) парсинга прекращаем цикл
         if not message.message: continue # если сообщение не содержит никакого текста тогда пропускаем итерацию
         
-        print(f"total: {count} message id: {message.id}")
+        print(f"total: {index} message id: {message.id}")
                 
         path: str  = await return_photo_path(message)
         links: list[str | None] = check_message_for_links(message)
@@ -89,31 +88,31 @@ async def parse_messages(channel_id: int | str, limit: int=None):
             links = links,
             views = views
         )
-        count += 1
     
-    print(f"Parsed {count} messages for {datetime.now()-start_timestamp}")
+    print(f"parsing time: {datetime.now() - start_timestamp}")
 
 
 TOTAL_HANDLED = 0
 @client.on(NewMessage(chats=SOURCE_STOGAGE))
 async def message_handler(event: NewMessage.Event):
     global TOTAL_HANDLED
-    # TODO допписать логику пропуска сообщений без текста
-    # 
+
     message: Message = event.message
-    if message.photo:
-        path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
-        await message.download_media(path)
-    else: 
-        path = None
+    
+    if not message.message: return
+
+    views = await get_message_views(client, message)
+    path = await return_photo_path(message)
+    links = check_message_for_links(message)
+    
     add_message(
         channel_id = message.peer_id,
         message_id = message.id,
-        views = await get_message_views(client, message),
+        views = views,
         date = message.date,
         text = message.message,
-        photo_path = ...,
-        links = await check_message_for_links(message)
+        photo_path = path,
+        links = links
     )
 
     TOTAL_HANDLED += 1
@@ -129,10 +128,11 @@ async def main():
     # for message in get_all_messages():
     #     print(message)
     
-    channels = get_all_channels()
-    print(channels)
+    # channels = get_all_channels()
+    # print(channels)
 
     await client.run_until_disconnected()
+
 
 
 if __name__ == "__main__":
