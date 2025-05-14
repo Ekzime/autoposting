@@ -49,8 +49,9 @@ def check_message_for_links(message: Message) -> list[str]:
                 if match not in found_urls
             ]
     return found_urls
-            
 
+
+# TODO решить вопрос с поведением функции await client.download_media() когда в сообщении несколько изображений
 async def return_photo_path(message: Message) -> str | None:
     if not message.media:
         return None

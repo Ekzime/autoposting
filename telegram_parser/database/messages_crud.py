@@ -45,11 +45,11 @@ def get_all_messages() -> list[dict]:
         return result
 
 
-def get_messages_by_channel(channel_id: int) -> list[Messages]:
-    with Session(engine) as connection:
-        ...
+# def get_messages_by_channel(channel_id: int) -> list[Messages]:
+#     with Session(engine) as connection:
+#         ...
 
-
+# TODO переделать функцию чтобы она возвращала dict
 def get_messages_by_date(from_date: datetime=None, to_date: datetime=None) -> list[dict] | None: 
     """if no arguments are passed it returns all database rows"""
     with Session(engine) as connection:
@@ -81,10 +81,12 @@ def get_messages_by_date(from_date: datetime=None, to_date: datetime=None) -> li
             return sorted(messages, key=lambda x: x.date)
 
 
+# TODO переделать функцию так что бы она возвращала list[dict] или None 
 def get_message_by_text(target_text: str) -> list[Messages] | None:
+    """Эту функцию можно использовать например чтобы узнать количество сообщений к конкретным словом или фразой"""
     with Session(engine) as connection:
         query: Select = select(Messages).where(Messages.text.contains(target_text))
-        messages: list[Messages] = connection.scalars(query).all()
+        messages: list[Messages] = connection.scalars(query).all() 
         return sorted(messages, key=lambda x: x.date)
 
 
