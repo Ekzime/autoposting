@@ -7,46 +7,51 @@ from sqlalchemy.orm import (
     Mapped,
     relationship
 )
-from sqlalchemy.types import String, Text, DateTime, Integer, JSON
+from sqlalchemy.types import (
+    String, 
+    Text, 
+    DateTime, 
+    Integer, 
+    JSON
+)
+
+
 
 # Правильный URL для MySQL (без .db):
-DB_URL = "mysql+pymysql://root@localhost:3306/parser.db"
+DB_URL = "sqlite:///database/parser.db"
 engine = create_engine(DB_URL, echo=True, pool_pre_ping=True)
 
 BaseModel = declarative_base()
 
 
+
 class Channels(BaseModel):
     __tablename__ = "channels"
 
-    id:      Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
-    peer_id: Mapped[int]      = mapped_column(Integer, unique=True, nullable=True)
-    username: Mapped[str]     = mapped_column(String(100), unique=True, nullable=True)
-    title:    Mapped[str]     = mapped_column(String(255), nullable=False)
+    id:       Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    peer_id:  Mapped[int] = mapped_column(Integer, unique=True, nullable=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=True)
+    title:    Mapped[str] = mapped_column(String(255), nullable=False)
 
-    messages: Mapped[list[Messages]] = relationship(
-        "Messages", back_populates="channel"
-    )
+    messages: Mapped[list[Messages]] = relationship("Messages", back_populates="channel")
+
 
 
 class Messages(BaseModel):
     __tablename__ = "messages"
-    __table_args__ = (
-        UniqueConstraint("message_id", "channel_id", name="uq_message_channel"),
-    )
+    __table_args__ = (UniqueConstraint("message_id", "channel_id", name="uq_message_channel"),)
 
-    id:         Mapped[int]           = mapped_column(Integer, primary_key=True, autoincrement=True)
-    channel_id: Mapped[int]           = mapped_column(Integer, ForeignKey("channels.peer_id"), nullable=False)
-    message_id: Mapped[int]           = mapped_column(Integer, nullable=False)
-    text:       Mapped[str | None]    = mapped_column(Text, nullable=True)
-    length:     Mapped[int]           = mapped_column(Integer, nullable=False)
-    date:       Mapped[datetime]      = mapped_column(DateTime, nullable=False)
-    photo_path: Mapped[str | None]    = mapped_column(String(100), unique=True, nullable=True)
+    id:         Mapped[int]              = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel_id: Mapped[int]              = mapped_column(Integer, ForeignKey("channels.peer_id"), nullable=False)
+    message_id: Mapped[int]              = mapped_column(Integer, nullable=False)
+    text:       Mapped[str | None]       = mapped_column(Text, nullable=True)
+    length:     Mapped[int]              = mapped_column(Integer, nullable=False)
+    date:       Mapped[datetime]         = mapped_column(DateTime, nullable=False)
+    photo_path: Mapped[str | None]       = mapped_column(String(100), unique=True, nullable=True)
     links:      Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
-    views:      Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
+    views:      Mapped[int]              = mapped_column(Integer, nullable=False, default=0)
 
-    channel: Mapped[Channels] = relationship("Channels", back_populates="messages")
+    channel:    Mapped[Channels] = relationship("Channels", back_populates="messages")
 
 
-# Создание схемы в базе данных
 BaseModel.metadata.create_all(engine)

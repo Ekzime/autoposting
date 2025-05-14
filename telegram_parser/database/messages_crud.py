@@ -1,13 +1,9 @@
 # ./database/messages_crud.py
-import re
 from sqlalchemy import select, Select, and_, delete
 from sqlalchemy.orm import Session
 from .alchemy_db import engine, Messages
 from datetime import datetime
 from telethon.types import Channel
-from telethon.types import Message
-from ..telegram_requests import get_message_views
-
 
 
 
@@ -26,20 +22,14 @@ def add_message(channel_id, message_id, text, date, photo_path, links, views) ->
             )
         )
         connection.commit()
-        print(f"Added new row to Messages\n     chat: {channel_id} message: {message_id}")
+        print(f"Added new row to Messages\n     chat: {channel_id}\n    message: {message_id}")
 
 
-
-    with Session(engine) as connection:
-        messages = connection.scalars(select(Messages)).all()
-        return sorted(messages, key=lambda x: x.date)
-
-def get_all_messages() -> list[Messages]:
+def get_all_messages() -> list[dict]:
     with Session(engine) as session:
         messages = session.scalars(select(Messages)).all()
-        result = []
-        for m in messages:
-            result.append({
+        result = [
+            {
                 "id":           m.id,
                 "channel_id":   m.channel_id,
                 "message_id":   m.message_id,
@@ -49,17 +39,18 @@ def get_all_messages() -> list[Messages]:
                 "photo_path":   m.photo_path,
                 "links":        m.links,
                 "views":        m.views,
-            })
+            } 
+            for m in messages
+        ]
         return result
-    
-def get_messages_by_channel(channel: Channel) -> list[Messages]:
-    if not isinstance(channel, Channel):
-        raise TypeError(f"channel: {channel} must be 'Channel' type")
+
+
+def get_messages_by_channel(channel_id: int) -> list[Messages]:
     with Session(engine) as connection:
         ...
 
 
-def get_messages_by_date(from_date: datetime=None, to_date: datetime=None) -> list[Messages] | None: 
+def get_messages_by_date(from_date: datetime=None, to_date: datetime=None) -> list[dict] | None: 
     """if no arguments are passed it returns all database rows"""
     with Session(engine) as connection:
         if not from_date and not to_date: # [- -] return all d

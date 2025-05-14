@@ -18,10 +18,8 @@ from telethon.tl.types import Channel, Message
 from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, MessageViews
 
 from datetime import datetime
-
 from config import *
-
-from .telegram_requests import get_message_views
+from telegram_requests import get_message_views
 
 
 
@@ -53,6 +51,15 @@ def check_message_for_links(message: Message) -> list[str]:
     return found_urls
             
 
+async def return_photo_path(message: Message) -> str | None:
+    if not message.media:
+        return None
+    path = os.path.join(PHOTO_STORAGE, f"{message.peer_id}_{message.id}.jpeg")
+    await client.download_media(message=message, file=path)
+    
+    return path
+
+
 async def parse_messages(channel_id: int | str, limit: int=None):
     """main parsing func"""
     start_timestamp = datetime.now()
@@ -61,15 +68,14 @@ async def parse_messages(channel_id: int | str, limit: int=None):
     
     count = 1
     async for message in client.iter_messages(target_entity):
-        if limit and count == limit: break
+        message: Message = message # определяем правильный тип (почему то вс код не отобраает поля обьекта message без явного определения)
+        
+        if (limit and count == limit): break # если достигнут лимит(глубина) парсинга прекращаем цикл
+        if not message.message: continue # если сообщение не содержит никакого текста тогда пропускаем итерацию
         
         print(f"total: {count} message id: {message.id}")
-
-        if message.photo:
-            path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
-            await message.download_media(path)
-        else: 
-            path = None
+                
+        path: str  = await return_photo_path(message)
         links: list[str | None] = check_message_for_links(message)
         views: int = await get_message_views(client, message)
         
@@ -83,16 +89,16 @@ async def parse_messages(channel_id: int | str, limit: int=None):
             views = views
         )
         count += 1
+    
     print(f"Parsed {count} messages for {datetime.now()-start_timestamp}")
 
-
-# message handler function
 
 TOTAL_HANDLED = 0
 @client.on(NewMessage(chats=SOURCE_STOGAGE))
 async def message_handler(event: NewMessage.Event):
     global TOTAL_HANDLED
-
+    # TODO допписать логику пропуска сообщений без текста
+    # 
     message: Message = event.message
     if message.photo:
         path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
@@ -113,15 +119,17 @@ async def message_handler(event: NewMessage.Event):
     print(f"total parsed: {TOTAL_HANDLED}")
 
 
-
 async def main():
     await client.connect()
     await client.start()
     
     # пример использования парсера:
-    await parse_messages("https://t.me/incrypted", limit=10)
-    for message in get_all_messages():
-        print(message)
+    # await parse_messages("https://t.me/incrypted", limit=10)
+    # for message in get_all_messages():
+    #     print(message)
+    
+    channels = get_all_channels()
+    print(channels)
 
     await client.run_until_disconnected()
 
