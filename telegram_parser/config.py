@@ -1,8 +1,13 @@
-PHONE_NUMBER = None
-API_ID = 25595904
-API_HASH = "3ecf04ff9955ae14e875920d137d1503"
-SESSION = "t_sess"
-PHOTO_STORAGE = "database/photos"
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+PHONE_NUMBER = os.getenv("PHONE_NUMBER")
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+SESSION = os.getenv("SESSION")
+PHOTO_STORAGE = os.getenv("PHOTO_STORAGE")
 SOURCE_STOGAGE: list[str | int] = [
     5223667706,
     8080656368,

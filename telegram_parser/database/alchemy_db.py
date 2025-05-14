@@ -8,9 +8,13 @@ from sqlalchemy.orm import (
     relationship
 )
 from sqlalchemy.types import String, Text, DateTime, Integer, JSON
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 # Правильный URL для MySQL (без .db):
-DB_URL = "mysql+pymysql://root@localhost:3306/parser.db"
+DB_URL = os.getenv("DB_CONNECT_STRING")
 engine = create_engine(DB_URL, echo=True, pool_pre_ping=True)
 
 BaseModel = declarative_base()
