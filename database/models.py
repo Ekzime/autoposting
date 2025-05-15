@@ -33,6 +33,8 @@ class NewsStatus(enum.Enum):
     AI_PROCESSED = "ai_processed"
     ERROR_SENDING_TO_AI = "error_sending_to_ai"
     ERROR_AI_PROCESSING = "error_ai_processing"
+    POSTED = "posted"  
+    ERROR_POSTING = "error_posting"
 
 class Channels(BaseModel):
     __tablename__ = "channels"
@@ -41,6 +43,7 @@ class Channels(BaseModel):
     peer_id: Mapped[int]      = mapped_column(Integer, unique=True, nullable=True)
     username: Mapped[str]     = mapped_column(String(100), unique=True, nullable=True)
     title:    Mapped[str]     = mapped_column(String(255), nullable=False)
+    
 
     messages: Mapped[list[Messages]] = relationship(
         "Messages", back_populates="channel"

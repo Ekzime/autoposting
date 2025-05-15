@@ -26,27 +26,34 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_KEY"))
 model = genai.GenerativeModel("gemini-1.5-flash")
 
+# Модель для валидации входных данных
 class PostBatch(BaseModel):
+    # Список строк с текстами постов
     posts: List[str]
 
+# Инициализация FastAPI приложения
 app = FastAPI()
+# Настройка CORS для разрешения кросс-доменных запросов
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=    ["*"],  
-    allow_methods=    ["*"],
-    allow_headers=    ["*"],
-    allow_credentials=True,
+    allow_origins=    ["*"],  # Разрешаем запросы с любых доменов
+    allow_methods=    ["*"],  # Разрешаем все HTTP методы
+    allow_headers=    ["*"],  # Разрешаем все заголовки
+    allow_credentials=True,   # Разрешаем передачу учетных данных
 )
 
 
-
+# Функция обработки постов через Gemini API
 def process_posts(posts: list[str], prompt_template: str = prompt) -> list[str]:
+    # Формируем промпт, добавляя посты в виде списка
     prompt = prompt_template + "\n\n" + "\n".join(f"- {p}" for p in posts)
 
     try:
+        # Отправляем запрос к Gemini API
         response = model.generate_content(prompt)
         raw = response.text.strip()
 
+        # Выводим сырой ответ для отладки
         print("📥 GEMINI RAW RESPONSE:")
         print(raw)
 
@@ -64,12 +71,15 @@ def process_posts(posts: list[str], prompt_template: str = prompt) -> list[str]:
         return [line.strip("-• ").strip() for line in lines if line and not line.startswith("Вот")]
 
     except Exception as e:
+        # Логируем ошибку и возвращаем пустой список
         print(f"❌ Gemini Error: {e}")
         return []
 
 
+# Эндпоинт для фильтрации постов
 @app.post('/gemini/filter')
 async def multi_filter(data: PostBatch):
+    # Обрабатываем посты и возвращаем результат
     result = process_posts(posts=data.posts)
     return {
         'status': 'success',
