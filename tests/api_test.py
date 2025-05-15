@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from telegram_parser.database.messages_crud import get_all_messages
+from database.messages_crud import get_all_messages
 from dotenv import load_dotenv
 
 load_dotenv()
