@@ -19,7 +19,7 @@
 
 Запуск сервиса с джемини:
 ```bash
-uvicorn ai_filter.gemini:app --host 127.0.0.1 --port 8000 --reload
+uvicorn AIservice.gemini:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Parser

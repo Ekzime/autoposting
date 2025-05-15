@@ -5,20 +5,34 @@ from sqlalchemy.orm import (
     declarative_base,
     mapped_column,
     Mapped,
-    relationship
+    relationship,
+    sessionmaker
 )
 from sqlalchemy.types import String, Text, DateTime, Integer, JSON
 from dotenv import load_dotenv
 import os
+import enum
+from sqlalchemy import Enum as SQLAlchemyEnum, Text
 
 load_dotenv()
 
-# Правильный URL для MySQL (без .db):
 DB_URL = os.getenv("DB_CONNECT_STRING")
-engine = create_engine(DB_URL, echo=True, pool_pre_ping=True)
+if not DB_URL:
+    raise ValueError("Database connection string not found in environment variables")
+engine = create_engine(DB_URL, echo=False, pool_pre_ping=True)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 BaseModel = declarative_base()
 
+class NewsStatus(enum.Enum):
+    """
+    Класс для хранения статуса новости
+    """
+    NEW = "new"
+    SENT_TO_AI = "sent_to_ai"
+    AI_PROCESSED = "ai_processed"
+    ERROR_SENDING_TO_AI = "error_sending_to_ai"
+    ERROR_AI_PROCESSING = "error_ai_processing"
 
 class Channels(BaseModel):
     __tablename__ = "channels"
@@ -48,6 +62,8 @@ class Messages(BaseModel):
     photo_path: Mapped[str | None]    = mapped_column(String(100), unique=True, nullable=True)
     links:      Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     views:      Mapped[int]           = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[NewsStatus] = mapped_column(SQLAlchemyEnum(NewsStatus), default=NewsStatus.NEW, index=True)
+    ai_processed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     channel: Mapped[Channels] = relationship("Channels", back_populates="messages")
 

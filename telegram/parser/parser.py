@@ -4,8 +4,9 @@ import os
 import re
 import asyncio
 import database
-from database.messages_crud import add_message, get_all_messages
-from database.channels_crud import (
+from database.messages import add_message, get_all_messages
+from database.models import Channels, Messages, NewsStatus, engine, SessionLocal
+from database.channels import (
     get_channel_by_peer_id, 
     add_channel, 
     get_all_channels
@@ -13,16 +14,21 @@ from database.channels_crud import (
 
 from telethon import TelegramClient, functions
 from telethon.events import NewMessage
-from telethon.types import Channel, Message
-from telethon.tl.types import Channel, Message
-from telethon.tl.types import MessageEntityTextUrl, MessageEntityUrl, MessageViews
-
-from datetime import datetime
-
-from config import *
-
+from telethon.tl.types import (
+    Channel,
+    Message,
+    MessageEntityTextUrl, 
+    MessageEntityUrl, 
+    MessageViews,
+    PeerUser, 
+    PeerChat, 
+    PeerChannel
+)
+from sqlalchemy.orm import sessionmaker
+from .config import *
 from .telegram_requests import get_message_views
 
+from datetime import datetime
 
 
 client = TelegramClient(
@@ -59,11 +65,19 @@ async def parse_messages(channel_id: int | str, limit: int=None):
     
     target_entity = await client.get_entity(channel_id)
     
+    if isinstance(target_entity, Channel):
+        print(f"Проверка/добавление основного канала '{target_entity.title}' (ID: {target_entity.id}) в БД.")
+        add_channel(target_entity)
+    else:
+        print(f"Целевая сущность {channel_id} не является Channel, пропускаем добавление в БД.")
+
     count = 1
     async for message in client.iter_messages(target_entity):
         if limit and count == limit: break
         
         print(f"total: {count} message id: {message.id}")
+
+        channel_peer_id_for_message = target_entity.id
 
         if message.photo:
             path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
@@ -74,7 +88,7 @@ async def parse_messages(channel_id: int | str, limit: int=None):
         views: int = await get_message_views(client, message)
         
         add_message(
-            channel_id = message.chat.id,
+            channel_id = channel_peer_id_for_message,
             message_id = message.id,
             text = message.text,
             date = message.date, 
