@@ -8,7 +8,7 @@ from sqlalchemy import select, Select
 
 
 # TODO * подумать как можно сразу добавлять все сообщения канала в бд
-def add_channel(peer_id, title, username: str=None) -> None:
+def add_channel(peer_id, title, username: str=None) -> Channels | None:
     with Session(engine) as connection:
         if get_channel_by_peer_id(peer_id):
             print(f"channel {title} already exist in db")
@@ -22,16 +22,27 @@ def add_channel(peer_id, title, username: str=None) -> None:
             connection.add(new_channel)
             connection.commit()
             print(f"Channel {title} added to db")
+            return peer_id
+        
         except Exception as error:
             print(f"got error on channel adding: {error}")
             connection.rollback()
 
-# TODO переделать функцию чтобы она возвращала dict
+
 # TODO добавить к параметрам функции опцию которая позволяет выбрать возвращать ли набор всех сообщений для каждого канала
-def get_all_channels() -> list[Channels]:
+def get_all_channels() -> list[dict]:
     with Session(engine) as connection:
         channels = connection.scalars(select(Channels)).all()
-        return channels
+        result = []
+        for channel in channels:
+            result.append(
+                {
+                    "peer_id": channel.peer_id,
+                    "username": channel.username,
+                    "title": channel.title,
+                }
+            )
+        return result
 
 
 # TODO переделать функцию чтобы можно было вытаскивать dict представляющий канал

@@ -18,7 +18,7 @@ from sqlalchemy.types import (
 
 
 # Правильный URL для MySQL (без .db):
-DB_URL = "sqlite:///parser.db"
+DB_URL = "mysql+pymysql://root@127.0.0.1:3306/parser.db"
 engine = create_engine(DB_URL, echo=True, pool_pre_ping=True)
 
 BaseModel = declarative_base()
