@@ -45,10 +45,16 @@ def get_all_channels() -> list[dict]:
         return result
 
 
-# TODO переделать функцию чтобы можно было вытаскивать dict представляющий канал
 # TODO * подумать над тем чтобы прикрутить к этому dict какую нибудь расширеную статистику канала 
 def get_channel_by_peer_id(peer_id: int) -> Channels | None:
     with Session(engine) as connection:
         query: Select = select(Channels).where(Channels.peer_id == peer_id)
         result = connection.scalars(query).one_or_none()
-        return result
+        if result:
+            channel_obj = result
+            return {
+                "peer_id": channel_obj.peer_id,
+                "username": channel_obj.username,
+                "title": channel_obj.title
+            }
+        return {}

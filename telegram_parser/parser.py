@@ -150,10 +150,7 @@ async def main():
     #     print(message)
     
     channels = get_all_channels()
-    for channel in channels:
-        print(
-            channel.messages
-        )
+    print(channels)
 
     await client.run_until_disconnected()
 
