@@ -102,7 +102,8 @@ async def init_channels():
     for channel in SOURCE_STOGAGE:
         print(f"processing for '{channel}'")
         channel = await client.get_entity(channel)
-        if channel_id := add_channel(channel.id, channel.title, channel.username):
+        channel_id = add_channel(channel.id, channel.title, channel.username)
+        if channel_id:
             print(f"channel {channel_id} not in db, adding started...")
             new_channels += 1
             await parse_messages(channel.id)
