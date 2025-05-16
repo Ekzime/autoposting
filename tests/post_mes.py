@@ -1,10 +1,9 @@
 import asyncio
 import os
 import logging
-from aiogram import Bot
+from aiogram import Bot, Dispatcher
 from dotenv import load_dotenv
 from datetime import datetime 
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(name)s [%(funcName)s] - %(message)s', 

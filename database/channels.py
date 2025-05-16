@@ -1,7 +1,7 @@
 from telethon.tl.types import Channel
-from database.models import Channels, engine
+from database.models import Channels, engine, PostingTarget
 from sqlalchemy.orm import Session
-from sqlalchemy import select, Select
+from sqlalchemy import select, Select, update
 
 def add_channel(channel: Channel) -> None:
     with Session(engine) as connection:
@@ -33,3 +33,9 @@ def get_channel_by_peer_id(peer_id: int) -> Channels | None:
         query: Select = select(Channels).where(Channels.peer_id == peer_id)
         result = connection.scalars(query).one_or_none()
         return result
+    
+
+# Методы для работы с таблицей PostingTarget
+# =========================================
+
+
