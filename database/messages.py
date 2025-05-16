@@ -49,12 +49,6 @@ def get_all_messages() -> list[Messages]:
             })
         return result
     
-def get_messages_by_channel(channel: Channel) -> list[Messages]:
-    if not isinstance(channel, Channel):
-        raise TypeError(f"channel: {channel} must be 'Channel' type")
-    with Session(engine) as connection:
-        ...
-
 
 def get_messages_by_date(from_date: datetime=None, to_date: datetime=None) -> list[Messages] | None: 
     """if no arguments are passed it returns all database rows"""
