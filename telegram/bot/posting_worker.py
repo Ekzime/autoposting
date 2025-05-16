@@ -381,7 +381,23 @@ def create_bot():
 
 
 def close_bot_session():
-    ...
+    if (
+        bot_instance and 
+        hasattr(bot_instance, 'session') and 
+        bot_instance.session and 
+        hasattr(bot_instance.session, 'closed') and
+        not bot_instance.session.closed 
+    ): 
+        logging.info("Закрытие сессии бота...")
+        try:
+            if loop.is_running():
+                loop.run_until_complete(bot_instance.session.close())
+            else:
+                asyncio.run(bot_instance.session.close())
+        except Exception as e:
+            logging.error(f"Ошибка закрытия сессии: {e}")
+            
+    logging.info("Работа posting_worker.py завершена")
 
 
 if __name__ == "__main__":
@@ -398,22 +414,4 @@ if __name__ == "__main__":
     except Exception as e:
         logging.critical(f"Критическая ошибка: {e}", exc_info=True)
     finally:
-
-        if (
-            bot_instance and 
-            bot_instance.session and 
-            not bot_instance.session.closed and
-            hasattr(bot_instance, 'session') and 
-            hasattr(bot_instance.session, 'closed') 
-        ):
-            
-            logging.info("Закрытие сессии бота...")
-            try:
-                if loop.is_running():
-                    loop.run_until_complete(bot_instance.session.close())
-                else:
-                    asyncio.run(bot_instance.session.close())
-            except Exception as e:
-                logging.error(f"Ошибка закрытия сессии: {e}")
-                
-        logging.info("Работа posting_worker.py завершена")
+        close_bot_session()
