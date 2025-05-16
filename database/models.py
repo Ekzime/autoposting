@@ -11,7 +11,7 @@ from sqlalchemy.orm import (
     relationship,
     sessionmaker
 )
-from sqlalchemy.types import String, Text, DateTime, Integer, JSON
+from sqlalchemy.types import String, Text, DateTime, Integer, JSON, Boolean
 
 # Импорты для работы с переменными окружения
 from dotenv import load_dotenv
@@ -97,6 +97,19 @@ class Messages(BaseModel):
 
     # Связь многие-к-одному с каналом
     channel: Mapped[Channels] = relationship("Channels", back_populates="messages")
+
+class PostingtTarget(BaseModel):
+    __tablename__ = "posting_targets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_chat_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True) # Храним как строку (@username или -100число)
+    target_title: Mapped[str | None] = mapped_column(String(255), nullable=True) # Название канала 
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Активна ли эта настройка
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<PostingTarget(id={self.id}, target_chat_id='{self.target_chat_id}', title='{self.target_title}')>"
+
 
 
 # Создание всех таблиц в базе данных
