@@ -1,9 +1,10 @@
-# ./parser.py
-
+# Импорты стандартных библиотек
 import os
 import re
 import asyncio
 import database
+
+# Импорты функций для работы с базой данных
 from database.messages import add_message, get_all_messages
 from database.models import Channels, Messages, NewsStatus, engine, SessionLocal
 from database.channels import (
@@ -12,6 +13,7 @@ from database.channels import (
     get_all_channels
 )
 
+# Импорты библиотеки Telethon для работы с Telegram API
 from telethon import TelegramClient, functions
 from telethon.events import NewMessage
 from telethon.tl.types import (
@@ -24,13 +26,19 @@ from telethon.tl.types import (
     PeerChat, 
     PeerChannel
 )
+
+# Импорт для работы с SQLAlchemy
 from sqlalchemy.orm import sessionmaker
+
+# Импорты локальных модулей
 from .config import *
 from .telegram_requests import get_message_views
 
+# Импорт для работы с датой и временем
 from datetime import datetime
 
 
+# Инициализация клиента Telegram
 client = TelegramClient(
     SESSION, 
     API_ID, 
@@ -39,14 +47,23 @@ client = TelegramClient(
 
 
 def check_message_for_links(message: Message) -> list[str]:
+    """
+    Проверяет сообщение на наличие ссылок
+    Args:
+        message: объект сообщения Telegram
+    Returns:
+        Список найденных URL-адресов
+    """
     found_urls: list[str] = []
+    # Проверка наличия специальных сущностей в сообщении (встроенные ссылки)
     if message.entities:
         for entity in message.entities:
             if isinstance(entity, MessageEntityUrl):
                 found_urls.append(message.text[entity.offset : entity.offset + entity.length])
             elif isinstance(entity, MessageEntityTextUrl):
                 found_urls.append(entity.url)
-        
+    
+    # Если ссылки не найдены через entities, ищем их в тексте через регулярные выражения
     if not found_urls and message.text:
         url_pattern = re.compile(r'https?://\S+|www\.\S+')
         matches = url_pattern.findall(message.text)
@@ -60,11 +77,18 @@ def check_message_for_links(message: Message) -> list[str]:
             
 
 async def parse_messages(channel_id: int | str, limit: int=None):
-    """main parsing func"""
+    """
+    Основная функция парсинга сообщений из канала
+    Args:
+        channel_id: идентификатор или ссылка на канал
+        limit: ограничение количества сообщений для парсинга
+    """
     start_timestamp = datetime.now()
     
+    # Получаем информацию о канале
     target_entity = await client.get_entity(channel_id)
     
+    # Проверяем, является ли сущность каналом и добавляем в БД
     if isinstance(target_entity, Channel):
         print(f"Проверка/добавление основного канала '{target_entity.title}' (ID: {target_entity.id}) в БД.")
         add_channel(target_entity)
@@ -72,6 +96,7 @@ async def parse_messages(channel_id: int | str, limit: int=None):
         print(f"Целевая сущность {channel_id} не является Channel, пропускаем добавление в БД.")
 
     count = 1
+    # Итерируемся по сообщениям канала
     async for message in client.iter_messages(target_entity):
         if limit and count == limit: break
         
@@ -79,14 +104,18 @@ async def parse_messages(channel_id: int | str, limit: int=None):
 
         channel_peer_id_for_message = target_entity.id
 
+        # Обработка фотографий в сообщении
         if message.photo:
             path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
             await message.download_media(path)
         else: 
             path = None
+        
+        # Получение ссылок и просмотров
         links: list[str | None] = check_message_for_links(message)
         views: int = await get_message_views(client, message)
         
+        # Добавление сообщения в базу данных
         add_message(
             channel_id = channel_peer_id_for_message,
             message_id = message.id,
@@ -100,19 +129,28 @@ async def parse_messages(channel_id: int | str, limit: int=None):
     print(f"Parsed {count} messages for {datetime.now()-start_timestamp}")
 
 
-# message handler function
-
+# Счетчик обработанных сообщений
 TOTAL_HANDLED = 0
+
+# Обработчик новых сообщений
 @client.on(NewMessage(chats=SOURCE_STOGAGE))
 async def message_handler(event: NewMessage.Event):
+    """
+    Обработчик новых сообщений из отслеживаемых каналов
+    Args:
+        event: событие нового сообщения
+    """
     global TOTAL_HANDLED
 
     message: Message = event.message
+    # Обработка фотографий
     if message.photo:
         path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
         await message.download_media(path)
     else: 
         path = None
+    
+    # Добавление сообщения в базу данных
     add_message(
         channel_id = message.peer_id,
         message_id = message.id,
@@ -127,12 +165,15 @@ async def message_handler(event: NewMessage.Event):
     print(f"total parsed: {TOTAL_HANDLED}")
 
 
-
 async def main():
+    """
+    Основная функция запуска парсера
+    """
+    # Подключение к Telegram
     await client.connect()
     await client.start()
     
-    # пример использования парсера:
+    # Пример использования парсера
     await parse_messages("https://t.me/incrypted", limit=10)
     for message in get_all_messages():
         print(message)
@@ -140,6 +181,7 @@ async def main():
     await client.run_until_disconnected()
 
 
+# Точка входа в программу
 if __name__ == "__main__":
     try:
         asyncio.run(main())

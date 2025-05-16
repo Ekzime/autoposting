@@ -1,12 +1,20 @@
-import asyncio
-import httpx
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import select, update
-from database.models import Messages, NewsStatus, engine, SessionLocal
-from dotenv import load_dotenv
-import os
-from datetime import datetime
-import logging
+# Стандартные библиотеки Python
+import os  # Для работы с переменными окружения и файловой системой
+import httpx  # HTTP клиент для асинхронных запросов
+import asyncio  # Для асинхронного программирования
+import logging  # Для логирования
+from datetime import datetime  # Для работы с датой и временем
+
+# Библиотека для Telegram бота
+from aiogram import Bot  
+
+# SQLAlchemy для работы с базой данных
+from sqlalchemy.orm import sessionmaker  # Для создания сессий БД
+from sqlalchemy import select, update  # Для SQL запросов
+from database.models import Messages, NewsStatus, engine, SessionLocal  # Модели и настройки БД
+
+# Библиотека для работы с .env файлами
+from dotenv import load_dotenv  
 
 # Настройка базовой конфигурации логгера
 logging.basicConfig(
@@ -18,40 +26,121 @@ logging.basicConfig(
 load_dotenv()
 
 AI_SERVICE_URL = os.getenv("AI_API_URL")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
 
-async def send_message_to_telegram(message_id: int, text: str):
-    """
-    Отправляет сообщение в Telegram.
-    """
-    logging.info(f"Отправка сообщения ID {message_id} в Telegram: {text[:30]}...")
-    # Здесь должен быть код для отправки сообщения в Telegram
-    pass
+if not AI_SERVICE_URL: logging.warning("AI_API_URL не задан!") 
+if not TELEGRAM_BOT_TOKEN: logging.warning("TELEGRAM_BOT_TOKEN не задан! Постинг не будет работать.")
+if not TELEGRAM_CHANNEL_ID: logging.warning("TELEGRAM_CHANNEL_ID не задан! Постинг не будет работать.")
 
 logging.info("posting_worker.py загружен")
 
-async def get_new_messages(limit: int = 5) -> list[Messages]:
+async def post_message_to_telegram(
+    bot: Bot | None, 
+    channel_id_str: str | None, 
+    text_to_post: str | None, 
+    message_db_id: int
+) -> bool:
     """
-    Извлекает из БД новые сообщения (со статусом NEW и непустым текстом),
-    готовые к отправке в AI.
+    Асинхронно отправляет текстовое сообщение в указанный Telegram канал.
+    Возвращает True в случае успеха, False в случае ошибки или если данные неполные.
     """
-    logging.info("Получение новых сообщений из БД...")
-    def _get_new_messages():
-        with SessionLocal() as sync_session:
-            stmt_sync = (
+    if not all([bot, channel_id_str, text_to_post]): # message_db_id для лога, не для основной логики отправки
+        logging.warning(f"ID {message_db_id}: Недостаточно данных (бот/канал/текст) для отправки в Telegram.")
+        return False
+    
+    # --- ДИАГНОСТИКА ---
+    logging.info(f"ID {message_db_id}: Попытка поста. Исходный channel_id_str из .env: '{channel_id_str}' (тип: {type(channel_id_str)})")
+    
+    chat_id_for_send: str | int
+    try:
+        # Попытка преобразовать в int. aiogram должен справиться и со строкой, и с int.
+        chat_id_for_send = int(channel_id_str) 
+        logging.info(f"ID {message_db_id}: channel_id_str успешно преобразован в int: {chat_id_for_send} (тип: {type(chat_id_for_send)})")
+    except ValueError:
+        chat_id_for_send = channel_id_str # Используем как строку, если не число (например, @username)
+        logging.info(f"ID {message_db_id}: channel_id_str не преобразовался в int, используется как строка: '{chat_id_for_send}' (тип: {type(chat_id_for_send)})")
+    # --- КОНЕЦ ДИАГНОСТИКИ ---
+
+    try:
+        logging.info(f"ID {message_db_id}: Отправка в Telegram. chat_id={chat_id_for_send}, text='{text_to_post[:30]}...'")
+        await bot.send_message(chat_id=chat_id_for_send, text=text_to_post) # Используем chat_id_for_send
+        logging.info(f"ID {message_db_id}: Сообщение УСПЕШНО отправлено в Telegram канал '{chat_id_for_send}'.")
+        return True
+    except Exception as e:
+        logging.error(f"ID {message_db_id}: ОШИБКА при отправке сообщения в Telegram с chat_id='{chat_id_for_send}': {e}", exc_info=True)
+        return False
+
+
+async def get_messages_for_ai_processing(limit: int = 5) -> list[Messages]:
+    """
+    Получает сообщения со статусом NEW для обработки AI.
+    
+    Args:
+        limit: максимальное количество сообщений для получения
+    Returns:
+        Список сообщений для обработки AI
+    """
+    logging.info("Получение сообщений для AI (статус NEW)...")
+    
+    def _get_sync():
+        with SessionLocal() as session:
+            query = (
                 select(Messages)
-                .where(Messages.status == NewsStatus.NEW, Messages.text != None, Messages.text != "")
+                .where(
+                    Messages.status == NewsStatus.NEW,
+                    Messages.text != None,
+                    Messages.text != ""
+                )
                 .order_by(Messages.date.asc())
                 .limit(limit)
             )
-            result_sync = sync_session.execute(stmt_sync)
-            return result_sync.scalars().all()
+            return session.execute(query).scalars().all()
+            
+    messages = await asyncio.to_thread(_get_sync)
     
-    messages_list = await asyncio.to_thread(_get_new_messages)
-    if messages_list:
-        logging.info(f"Найдено {len(messages_list)} новых сообщений.")
+    if messages:
+        logging.info(f"Найдено {len(messages)} сообщений для AI.")
     else:
-        logging.info("Новых сообщений не найдено.")
-    return messages_list
+        logging.info("Нет сообщений для AI.")
+        
+    return messages
+
+
+async def get_messages_ready_for_posting(limit: int = 5) -> list[Messages]:
+    """
+    Получает обработанные AI сообщения готовые для публикации.
+    
+    Args:
+        limit: максимальное количество сообщений для получения
+    Returns:
+        Список сообщений готовых к публикации
+    """
+    logging.info("Получение сообщений для постинга (статус AI_PROCESSED)...")
+    
+    def _get_sync():
+        with SessionLocal() as session:
+            query = (
+                select(Messages)
+                .where(
+                    Messages.status == NewsStatus.AI_PROCESSED,
+                    Messages.ai_processed_text != None,
+                    Messages.ai_processed_text != ""
+                )
+                .order_by(Messages.date.asc())
+                .limit(limit)
+            )
+            return session.execute(query).scalars().all()
+            
+    messages = await asyncio.to_thread(_get_sync)
+    
+    if messages:
+        logging.info(f"Найдено {len(messages)} сообщений для постинга.")
+    else:
+        logging.info("Нет сообщений для постинга.")
+        
+    return messages
+
 
 async def _fetch_ai_response(message_id: int, text_to_process: str, service_url: str) -> str | None:
     """
@@ -59,176 +148,268 @@ async def _fetch_ai_response(message_id: int, text_to_process: str, service_url:
     Выбрасывает исключения httpx при ошибках сети или HTTP.
     """
     logging.info(f"ID {message_id}: Отправка в AI ({service_url}): {text_to_process[:30]}...")
+    
     async with httpx.AsyncClient(timeout=60.0) as client:
-        # Сервис AIservice/gemini.py ожидает ключ "posts", который должен быть списком строк (List[str]).
+        # Отправка запроса в AI сервис
         payload = {"posts": [text_to_process]}
         response = await client.post(service_url, json=payload)
-        response.raise_for_status()  # Вызовет исключение для 4xx/5xx ответов
+        response.raise_for_status()
 
-    response_json = response.json() # Ожидаемый формат от FastAPI: {'status': 'success', 'result': [...тут список...]}
+    response_json = response.json()
     processed_text = None
 
-    if response_json and isinstance(response_json, dict) and response_json.get("status") == "success":
-        ai_result_list = response_json.get("result") # ai_result_list может быть List[Dict] или List[str] или []
+    # Обработка ответа от AI
+    if (response_json and 
+        isinstance(response_json, dict) and 
+        response_json.get("status") == "success"):
         
-        if ai_result_list and isinstance(ai_result_list, list) and len(ai_result_list) > 0:
+        ai_result_list = response_json.get("result")
+        
+        if ai_result_list and isinstance(ai_result_list, list) and ai_result_list:
             first_item = ai_result_list[0]
             
             if isinstance(first_item, dict) and "text" in first_item:
-                # Случай: result = [{"text": "..."}, ...]
                 processed_text = first_item.get("text")
             elif isinstance(first_item, str):
-                # Случай: result = ["просто строка", ...]
                 processed_text = first_item
             
-            # Дополнительная проверка: если текст пустой (None или ""), считаем что текста нет
             if not processed_text:
-                 processed_text = None 
+                processed_text = None 
     
-    logging.info(f"ID {message_id}: Ответ от AI: {processed_text[:50] if processed_text else 'Нет текста (или пустой список от AI)'}")
+    logging.info(
+        f"ID {message_id}: Ответ от AI: "
+        f"{processed_text[:50] if processed_text else 'Нет текста (или пустой список от AI)'}"
+    )
     return processed_text
+
 
 async def simplified_process_message(message_id: int, original_text: str):
     """
-    Упрощенная функция: отправляет текст в AI, получает ответ и обновляет запись в БД.
+    Отправляет текст в AI, получает ответ и обновляет запись в БД.
 
     Args:
-        message_id (int): ID сообщения в базе данных, используется для обновления статуса и результата обработки
-        original_text (str): Исходный текст сообщения, который будет отправлен в AI сервис для обработки
+        message_id: ID сообщения в базе данных
+        original_text: Исходный текст сообщения для обработки AI сервисом
     """
     logging.info(f"Обработка сообщения ID {message_id} через AI...")
-    new_status = NewsStatus.ERROR_AI_PROCESSING # Статус по умолчанию, если что-то пойдет не так
+    new_status = NewsStatus.ERROR_AI_PROCESSING
     processed_text_from_ai = None
     
+    # Проверка входных данных
     if not original_text or not AI_SERVICE_URL:
         logging.warning(f"Сообщение ID {message_id} не имеет текста или AI_SERVICE_URL не задан. Пропуск.")
-        new_status = NewsStatus.ERROR_AI_PROCESSING 
-        # Обновим статус в БД на ошибку
-        def _update_db_status_sync_error():
-            with SessionLocal() as s:
-                stmt = (
-                    update(Messages)
-                    .where(Messages.id == message_id)
-                    .values(status=new_status, ai_processed_text="Нет текста или URL AI")
-                )
-                s.execute(stmt)
-                s.commit()
-        await asyncio.to_thread(_update_db_status_sync_error)
+        await _update_message_status(
+            message_id, 
+            NewsStatus.ERROR_AI_PROCESSING,
+            "Нет текста или URL AI"
+        )
         return
 
     try:
-        # Шаг 1: Обновить статус сообщения в БД на "отправляется в AI".
-        # Это делается для отслеживания состояния обработки сообщения.
-        def _update_db_status_sync_sent():
-            with SessionLocal() as s:
-                stmt = (
-                    update(Messages)
-                    .where(Messages.id == message_id)
-                    .values(status=NewsStatus.SENT_TO_AI) # Устанавливаем статус "отправлено в AI"
-                )
-                s.execute(stmt)
-                s.commit()
-        await asyncio.to_thread(_update_db_status_sync_sent)
+        # Обновление статуса на "отправляется в AI"
+        await _update_message_status(message_id, NewsStatus.SENT_TO_AI)
         logging.info(f"ID {message_id}: Статус обновлен на SENT_TO_AI.")
 
-        # Шаг 2: Вызов AI сервиса через новый метод
-        processed_text_from_ai = await _fetch_ai_response(message_id, original_text, AI_SERVICE_URL)
+        # Получение ответа от AI
+        processed_text_from_ai = await _fetch_ai_response(
+            message_id, 
+            original_text, 
+            AI_SERVICE_URL
+        )
 
-        # Определение финального статуса в зависимости от ответа AI
+        # Определение финального статуса
         if processed_text_from_ai:
-            new_status = NewsStatus.AI_PROCESSED # AI успешно обработал текст
+            new_status = NewsStatus.AI_PROCESSED
         else:
-            # AI вернул успешный ответ, но без текста (processed_text_from_ai is None)
-            # или сервис вернул текст, но он пустой (processed_text_from_ai == "")
-            new_status = NewsStatus.ERROR_AI_PROCESSING # Или специальный статус для пустого ответа
-            processed_text_from_ai = "AI не вернул текст" # Записываем информацию о пустом ответе
-
+            new_status = NewsStatus.ERROR_AI_PROCESSING
+            processed_text_from_ai = "AI не вернул текст"
 
     except httpx.RequestError as e:
-        # Обработка ошибок сети (например, DNS resolving, connection refused)
         logging.error(f"ID {message_id}: Ошибка сети при обращении к AI: {e}")
-        new_status = NewsStatus.ERROR_SENDING_TO_AI # Статус: ошибка отправки
+        new_status = NewsStatus.ERROR_SENDING_TO_AI
         processed_text_from_ai = f"Ошибка сети: {str(e)}"
+        
     except httpx.HTTPStatusError as e:
-        # Обработка HTTP ошибок, возвращенных AI сервисом (например, 400, 500, 503)
-        logging.error(f"ID {message_id}: AI сервис вернул HTTP ошибку: {e.response.status_code} - {e.response.text}")
-        new_status = NewsStatus.ERROR_AI_PROCESSING # Статус: ошибка при обработке AI
-        # Сохраняем код ошибки и часть текста ответа для диагностики
-        processed_text_from_ai = f"AI ошибка HTTP: {e.response.status_code} - {e.response.text[:100]}" # Увеличил до 100 символов для тела ответа
+        logging.error(
+            f"ID {message_id}: AI сервис вернул HTTP ошибку: "
+            f"{e.response.status_code} - {e.response.text}"
+        )
+        new_status = NewsStatus.ERROR_AI_PROCESSING
+        processed_text_from_ai = (
+            f"AI ошибка HTTP: {e.response.status_code} - {e.response.text[:100]}"
+        )
+        
     except Exception as e:
-        # Обработка любых других непредвиденных ошибок во время процесса
-        logging.error(f"ID {message_id}: Непредвиденная ошибка при обработке AI: {e}", exc_info=True) # exc_info=True добавит traceback
-        new_status = NewsStatus.ERROR_AI_PROCESSING # Общий статус ошибки
-        processed_text_from_ai = f"Ошибка: {str(e)[:100]}" # Сохраняем часть сообщения об ошибке
+        logging.error(
+            f"ID {message_id}: Непредвиденная ошибка при обработке AI: {e}", 
+            exc_info=True
+        )
+        new_status = NewsStatus.ERROR_AI_PROCESSING
+        processed_text_from_ai = f"Ошибка: {str(e)[:100]}"
+        
     finally:
-        # Шаг 3: Финальное обновление.
-        # Этот блок выполнится всегда, независимо от того, была ошибка или нет.
-        # Обновляем сообщение в БД с финальным статусом и результатом (или ошибкой) от AI.
-        def _update_db_final_sync():
-            with SessionLocal() as s:
-                stmt = (
-                    update(Messages)
-                    .where(Messages.id == message_id)
-                    .values(status=new_status, ai_processed_text=processed_text_from_ai)
-                )
-                s.execute(stmt)
-                s.commit()
-        await asyncio.to_thread(_update_db_final_sync)
-        logging.info(f"ID {message_id}: Финальный статус в БД: {new_status.value}, Результат AI сохранен.")
+        # Финальное обновление статуса
+        await _update_message_status(
+            message_id,
+            new_status,
+            processed_text_from_ai
+        )
+        logging.info(
+            f"ID {message_id}: Финальный статус в БД: {new_status.value}, "
+            "Результат AI сохранен."
+        )
 
-async def main_logic():
+
+async def main_logic(bot_for_posting: Bot | None):
     """
-    Основная логика обработки новых сообщений.
-    Получает новые сообщения из БД и отправляет их на обработку.
-    
-    Ограничение в 2 сообщения за раз позволяет не перегружать AI сервис.
-    Между обработкой сообщений делается пауза в 2 секунды.
+    Основная логика: сначала обработка AI, затем постинг.
     """
     logging.info("main_logic запущен")
-    new_messages = await get_new_messages(limit=2)
 
-    if new_messages:
-        logging.info(f"Найдены {len(new_messages)} новых сообщений для обработки.")
-        for msg_obj in new_messages:
-            # Проверяем, что msg_obj.text не None перед передачей
-            if msg_obj.text is not None:
-                await simplified_process_message(msg_obj.id, msg_obj.text)
-            else:
-                logging.warning(f"Сообщение ID {msg_obj.id} имеет пустой текст (None). Пропуск обработки AI.")
-                # Опционально: обновить статус в БД на какую-то ошибку или "пропущено"
-                def _update_skipped_status_sync():
-                    with SessionLocal() as s:
-                        stmt = (
-                            update(Messages)
-                            .where(Messages.id == msg_obj.id)
-                            .values(status=NewsStatus.ERROR_AI_PROCESSING, ai_processed_text="Сообщение имеет пустой текст (None)") 
-                        )
-                        s.execute(stmt)
-                        s.commit()
-                await asyncio.to_thread(_update_skipped_status_sync)
-                logging.info(f"ID {msg_obj.id}: Статус обновлен на ERROR_AI_PROCESSING из-за пустого текста.")
+    # Этап 1: Обработка AI
+    await _process_ai_messages()
+    
+    await asyncio.sleep(1)  # Пауза между этапами
 
-            await asyncio.sleep(2)  # Пауза между обработкой сообщений
-    else:
-        logging.info("Не найдено новых сообщений для обработки.")
+    # Этап 2: Постинг в Telegram
+    if not bot_for_posting or not TELEGRAM_CHANNEL_ID:
+        logging.warning(
+            "Инстанс бота для постинга или ID канала не предоставлены. "
+            "Этап постинга пропускается."
+        )
+        return
+        
+    await _process_posting_messages(bot_for_posting)
 
-async def run_periodic_tasks():
+
+async def run_periodic_tasks(bot_for_posting: Bot | None):
     """
     Запускает периодическое выполнение основной логики.
-    Выполняет main_logic() каждые 10 секунд в бесконечном цикле.
     """
+    logging.info("Запуск run_periodic_tasks в posting_worker...")
     while True:
-        await main_logic()
-        await asyncio.sleep(10)  # Пауза между циклами проверки новых сообщений
+        await main_logic(bot_for_posting)
+        logging.info("posting_worker: Следующий цикл через 10 секунд...")
+        await asyncio.sleep(10)
+
+
+# Вспомогательные функции
+async def _update_message_status(
+    message_id: int, 
+    status: NewsStatus, 
+    processed_text: str | None = None
+):
+    """Обновляет статус сообщения в БД"""
+    def _update_sync():
+        with SessionLocal() as session:
+            update_values = {"status": status}
+            if processed_text is not None:
+                update_values["ai_processed_text"] = processed_text
+                
+            stmt = (
+                update(Messages)
+                .where(Messages.id == message_id)
+                .values(**update_values)
+            )
+            session.execute(stmt)
+            session.commit()
+            
+    await asyncio.to_thread(_update_sync)
+
+
+async def _process_ai_messages():
+    """Обработка сообщений через AI"""
+    messages = await get_messages_for_ai_processing(limit=2)
+    
+    if not messages:
+        logging.info("Нет новых сообщений для AI обработки в этом цикле.")
+        return
+        
+    logging.info(f"Обработка AI для {len(messages)} сообщений.")
+    
+    for msg in messages:
+        if msg.text:
+            await simplified_process_message(msg.id, msg.text)
+        else:
+            logging.warning(f"Сообщение ID {msg.id} (для AI) имеет пустой текст. Пропуск.")
+            await _update_message_status(
+                msg.id,
+                NewsStatus.ERROR_AI_PROCESSING,
+                "Сообщение имеет пустой текст (None)"
+            )
+        await asyncio.sleep(1)
+
+
+async def _process_posting_messages(bot: Bot):
+    """Обработка постинга сообщений"""
+    messages = await get_messages_ready_for_posting(limit=2)
+    
+    if not messages:
+        logging.info("Нет сообщений, готовых к постингу, в этом цикле.")
+        return
+        
+    logging.info(f"Постинг для {len(messages)} сообщений...")
+    
+    for msg in messages:
+        if not msg.ai_processed_text:
+            logging.warning(
+                f"Сообщение ID {msg.id} (для постинга) не имеет "
+                "обработанного текста. Пропуск."
+            )
+            continue
+            
+        success = await post_message_to_telegram(
+            bot,
+            TELEGRAM_CHANNEL_ID,
+            msg.ai_processed_text,
+            msg.id
+        )
+        
+        status = NewsStatus.POSTED if success else NewsStatus.ERROR_POSTING
+        await _update_message_status(msg.id, status)
+        logging.info(f"ID {msg.id}: Статус после постинга в БД: {status.value}")
+        
+        await asyncio.sleep(1)
+
 
 if __name__ == "__main__":
+    logging.info("Запуск posting_worker.py как отдельного скрипта...")
+    
+    bot_instance = None
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+
+    if token:
+        bot_instance = Bot(token=token)
+        logging.info(f"Создан бот для постинга (токен: ...{token[-4:]}).")
+    else:
+        class DummyBot:
+            async def send_message(self, chat_id, text, **kwargs):
+                logging.info(f"[DUMMY BOT] Сообщение для {chat_id}: {text[:30]}...")
+                await asyncio.sleep(0.1)
+        bot_instance = DummyBot()
+        logging.info("Создан DummyBot (токен не найден)")
+
+    loop = asyncio.get_event_loop()
     try:
-        # Запуск периодических задач в асинхронном режиме
-        asyncio.run(run_periodic_tasks())
+        loop.run_until_complete(run_periodic_tasks(bot_instance))
     except KeyboardInterrupt:
-        # Обработка прерывания программы пользователем (Ctrl+C)
         logging.info("Программа прервана пользователем.")
     except Exception as e:
-        # Логирование любых непредвиденных ошибок
-        logging.critical(f"Произошла непредвиденная ошибка в главном цикле: {e}", exc_info=True) # exc_info=True для traceback
-
+        logging.critical(f"Критическая ошибка: {e}", exc_info=True)
+    finally:
+        # Закрываем сессию бота если это не DummyBot
+        if (bot_instance and 
+            hasattr(bot_instance, 'session') and 
+            bot_instance.session and 
+            hasattr(bot_instance.session, 'closed') and not bot_instance.session.closed):
+            
+            logging.info("Закрытие сессии бота...")
+            try:
+                if loop.is_running():
+                    loop.run_until_complete(bot_instance.session.close())
+                else:
+                    asyncio.run(bot_instance.session.close())
+            except Exception as e:
+                logging.error(f"Ошибка закрытия сессии: {e}")
+                
+        logging.info("Работа posting_worker.py завершена")
