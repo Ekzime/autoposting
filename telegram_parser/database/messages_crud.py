@@ -36,24 +36,26 @@ def add_message(channel_id, message_id, text, date, photo_path, links, views) ->
         print(f"Added new row to Messages\n     chat: {channel_id}\n    message: {message_id}")
 
 
-def get_all_messages() -> list[dict]:
+def get_all_messages() -> list[dict] | None:
     with Session(engine) as session:
         messages = session.scalars(select(Messages)).all()
-        result = [
-            {
-                "id":           m.id,
-                "channel_id":   m.channel_id,
-                "message_id":   m.message_id,
-                "text":         m.text,
-                "length":       m.length,
-                "date":         m.date.isoformat(),  # или m.date.timestamp()
-                "photo_path":   m.photo_path,
-                "links":        m.links,
-                "views":        m.views,
-            } 
-            for m in messages
-        ]
-        return result
+        if messages:
+            result = [
+                {
+                    "id":           m.id,
+                    "channel_id":   m.channel_id,
+                    "message_id":   m.message_id,
+                    "text":         m.text,
+                    "length":       m.length,
+                    "date":         m.date.isoformat(),  # или m.date.timestamp()
+                    "photo_path":   m.photo_path,
+                    "links":        m.links,
+                    "views":        m.views,
+                } 
+                for m in messages
+            ]
+            return result
+        return None
 
 
 # def get_messages_by_channel(channel_id: int) -> list[Messages]:

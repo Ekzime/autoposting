@@ -7,7 +7,6 @@ from sqlalchemy import select, Select
 
 
 
-# TODO * подумать как можно сразу добавлять все сообщения канала в бд
 def add_channel(peer_id, title, username: str=None) -> int | None:
     with Session(engine) as connection:
         if get_channel_by_peer_id(peer_id):
@@ -30,24 +29,25 @@ def add_channel(peer_id, title, username: str=None) -> int | None:
                 connection.rollback()
 
 
-# TODO добавить к параметрам функции опцию которая позволяет выбрать возвращать ли набор всех сообщений для каждого канала
-def get_all_channels() -> list[dict]:
+def get_all_channels() -> list[dict] | None:
     with Session(engine) as connection:
         channels = connection.scalars(select(Channels)).all()
-        result = []
-        for channel in channels:
-            result.append(
-                {
-                    "peer_id": channel.peer_id,
-                    "username": channel.username,
-                    "title": channel.title
-                    # "messages": [{}, {}, {}] # TODO набор всех сообщений
-                }
-            )
-        return result
+        if channels:
+            result = []
+            for channel in channels:
+                result.append(
+                    {
+                        "peer_id": channel.peer_id,
+                        "username": channel.username,
+                        "title": channel.title
+                        # "messages": [{}, {}, {}] # TODO набор всех сообщений
+                    }
+                )
+            return result
+        return None
 
 
-# TODO * подумать над тем чтобы прикрутить к этому dict какую нибудь расширеную статистику канала 
+# TODO * подумать над тем чтобы прикрутить к этому dict какую нибудь расширеную статистику канала
 def get_channel_by_peer_id(peer_id: int) -> Channels | None:
     with Session(engine) as connection:
         query: Select = select(Channels).where(Channels.peer_id == peer_id)
