@@ -2,13 +2,10 @@
 import re
 from sqlalchemy import select, Select, and_, delete
 from sqlalchemy.orm import Session
-from .alchemy_db import engine, Messages
+from .models import engine, Messages
 from datetime import datetime
 from telethon.types import Channel
 from telethon.types import Message
-from ..telegram_requests import get_message_views
-
-
 
 
 def add_message(channel_id, message_id, text, date, photo_path, links, views) -> None:
@@ -79,14 +76,14 @@ def get_messages_by_date(from_date: datetime=None, to_date: datetime=None) -> li
             query = select(Messages).where(
                 Messages.date <= to_date
             )
-            messages: list[Messages] = connection.scalars(query).all()
+            messages = connection.scalars(query).all()
             return sorted(messages, key=lambda x: x.date)
         
         if to_date is None and from_date: # [+ -] returns a segment starting from a specific moment
             query = select(Messages).where(
                 Messages.date >= from_date
             )
-            messages: list[Messages] = connection.scalars(query).all()
+            messages = connection.scalars(query).all()
             return sorted(messages, key=lambda x: x.date)
 
 

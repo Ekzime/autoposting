@@ -1,10 +1,7 @@
 from telethon.tl.types import Channel
-from database.alchemy_db import Channels, engine
+from database.models import Channels, engine
 from sqlalchemy.orm import Session
 from sqlalchemy import select, Select
-
-
-
 
 def add_channel(channel: Channel) -> None:
     with Session(engine) as connection:
