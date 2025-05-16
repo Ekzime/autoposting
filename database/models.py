@@ -69,6 +69,11 @@ class Channels(BaseModel):
     
     messages: Mapped[list[Messages]] = relationship("Messages", back_populates="channel") # Связь один-ко-многим с сообщениями
 
+    
+    def __repr__(self):
+        return f"peer_id: {self.peer_id} username: {self.username} title: {self.title}"
+    
+
 
 class Messages(BaseModel):
     __tablename__ = "messages"
@@ -87,6 +92,12 @@ class Messages(BaseModel):
     ai_processed_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # Текст после обработки ИИ
 
     channel: Mapped[Channels] = relationship("Channels", back_populates="messages")  # Связь многие-к-одному с каналом
+   
+   
+    def __repr__(self):
+        return f"channel_id: {self.channel_id} message_id: {self.message_id} text: {self.text} views: {self.views}"
+
+
 
 class PostingtTarget(BaseModel):
     __tablename__ = "posting_targets"

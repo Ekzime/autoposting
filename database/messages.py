@@ -1,15 +1,25 @@
 # ./database/messages_crud.py
-import re
+
 from sqlalchemy import select, Select, and_, delete
 from sqlalchemy.orm import Session
 from .models import engine, Messages
 from datetime import datetime
-from telethon.types import Channel
-from telethon.types import Message
+
 
 
 def add_message(channel_id, message_id, text, date, photo_path, links, views) -> None:
     with Session(engine) as connection:
+        query = select(Messages).where(
+            and_(
+                Messages.channel_id == channel_id,
+                Messages.message_id == message_id
+            )
+        )
+        result = connection.execute(query).first()
+        if result:
+            print(f"message: id:{message_id} already exist")
+            return
+        
         connection.add(
             Messages(
                 channel_id = channel_id,
@@ -23,13 +33,8 @@ def add_message(channel_id, message_id, text, date, photo_path, links, views) ->
             )
         )
         connection.commit()
-        print(f"Added new row to Messages\n     chat: {channel_id} message: {message_id}")
+        print(f"Added new row to Messages\n     chat: {channel_id}\n    message: {message_id}")
 
-
-
-    with Session(engine) as connection:
-        messages = connection.scalars(select(Messages)).all()
-        return sorted(messages, key=lambda x: x.date)
 
 def get_all_messages() -> list[Messages]:
     with Session(engine) as session:
