@@ -3,6 +3,8 @@ from database.models import Channels, engine, PostingTarget
 from sqlalchemy.orm import Session
 from sqlalchemy import select, Select, update
 
+
+
 def add_channel(channel: Channel) -> None:
     with Session(engine) as connection:
         if get_channel_by_peer_id(channel.id):

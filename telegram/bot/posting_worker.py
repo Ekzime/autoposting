@@ -1,11 +1,11 @@
-# Стандартные библиотеки Python
-import os  # Для работы с переменными окружения и файловой системой
-import httpx  # HTTP клиент для асинхронных запросов
-import asyncio  # Для асинхронного программирования
-import logging  # Для логирования
+# avtoposting/telegram/posting_worker.py
+
+import os # Для работы с переменными окружения и файловой системой
+import httpx # HTTP клиент для асинхронных запросов
+import asyncio # Для асинхронного программирования
+import logging # Для логирования
 from datetime import datetime  # Для работы с датой и временем
 
-# Библиотека для Telegram бота
 from aiogram import Bot  
 
 # SQLAlchemy для работы с базой данных
@@ -372,24 +372,41 @@ async def _process_posting_messages(bot: Bot):
         await asyncio.sleep(1)
 
 
+def create_bot():
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or None
+    if not token: raise ValueError("Token value getting error! token is None")
+    bot_instance = Bot(token=token)
+    logging.info(f"Создан бот для постинга (токен: ...{token[-4:]}).")
+    return bot_instance
+
+
+def close_bot_session():
+    if (
+        bot_instance and 
+        hasattr(bot_instance, 'session') and 
+        bot_instance.session and 
+        hasattr(bot_instance.session, 'closed') and
+        not bot_instance.session.closed 
+    ): 
+        logging.info("Закрытие сессии бота...")
+        try:
+            if loop.is_running():
+                loop.run_until_complete(bot_instance.session.close())
+            else:
+                asyncio.run(bot_instance.session.close())
+        except Exception as e:
+            logging.error(f"Ошибка закрытия сессии: {e}")
+            
+    logging.info("Работа posting_worker.py завершена")
+
+
 if __name__ == "__main__":
     logging.info("Запуск posting_worker.py как отдельного скрипта...")
     
-    bot_instance = None
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-
-    if token:
-        bot_instance = Bot(token=token)
-        logging.info(f"Создан бот для постинга (токен: ...{token[-4:]}).")
-    else:
-        class DummyBot:
-            async def send_message(self, chat_id, text, **kwargs):
-                logging.info(f"[DUMMY BOT] Сообщение для {chat_id}: {text[:30]}...")
-                await asyncio.sleep(0.1)
-        bot_instance = DummyBot()
-        logging.info("Создан DummyBot (токен не найден)")
+    bot_instance = create_bot()
 
     loop = asyncio.get_event_loop()
+    
     try:
         loop.run_until_complete(run_periodic_tasks(bot_instance))
     except KeyboardInterrupt:
@@ -397,19 +414,4 @@ if __name__ == "__main__":
     except Exception as e:
         logging.critical(f"Критическая ошибка: {e}", exc_info=True)
     finally:
-        # Закрываем сессию бота если это не DummyBot
-        if (bot_instance and 
-            hasattr(bot_instance, 'session') and 
-            bot_instance.session and 
-            hasattr(bot_instance.session, 'closed') and not bot_instance.session.closed):
-            
-            logging.info("Закрытие сессии бота...")
-            try:
-                if loop.is_running():
-                    loop.run_until_complete(bot_instance.session.close())
-                else:
-                    asyncio.run(bot_instance.session.close())
-            except Exception as e:
-                logging.error(f"Ошибка закрытия сессии: {e}")
-                
-        logging.info("Работа posting_worker.py завершена")
+        close_bot_session()
