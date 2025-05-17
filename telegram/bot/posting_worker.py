@@ -42,9 +42,24 @@ async def post_message_to_telegram(
     message_db_id: int
 ) -> bool:
     """
-    Асинхронно отправляет текстовое сообщение в указанный Telegram канал.
-    Возвращает True в случае успеха, False в случае ошибки или если данные неполные.
+    Отправляет сообщение в Telegram канал.
+    
+    Args:
+        bot (Bot | None): Экземпляр бота для отправки сообщений
+        channel_id_str (str | None): ID канала или username в виде строки
+        text_to_post (str | None): Текст для публикации
+        message_db_id (int): ID сообщения в базе данных (для логирования)
+        
+    Returns:
+        bool: True если отправка успешна, False в случае ошибки
+        
+    Действия:
+    1. Проверяет наличие всех необходимых данных (бот, ID канала, текст)
+    2. Пытается преобразовать ID канала в число, если не получается - использует как строку
+    3. Отправляет сообщение через бота
+    4. Логирует результат отправки
     """
+    
     if not all([bot, channel_id_str, text_to_post]): # message_db_id для лога, не для основной логики отправки
         logging.warning(f"ID {message_db_id}: Недостаточно данных (бот/канал/текст) для отправки в Telegram.")
         return False
@@ -74,13 +89,21 @@ async def post_message_to_telegram(
 
 async def get_messages_for_ai_processing(limit: int = 5) -> list[Messages]:
     """
-    Получает сообщения со статусом NEW для обработки AI.
+    Получает сообщения из базы данных для обработки искусственным интеллектом.
     
     Args:
-        limit: максимальное количество сообщений для получения
+        limit (int): Максимальное количество сообщений для получения. По умолчанию 5.
+        
     Returns:
-        Список сообщений для обработки AI
+        list[Messages]: Список объектов Messages, готовых для обработки AI.
+        
+    Действия:
+    1. Получает сообщения со статусом NEW из базы данных
+    2. Проверяет наличие непустого текста в сообщениях
+    3. Сортирует по дате (старые в начале)
+    4. Ограничивает количество записей параметром limit
     """
+    
     logging.info("Получение сообщений для AI (статус NEW)...")
     
     def _get_sync():
@@ -109,13 +132,21 @@ async def get_messages_for_ai_processing(limit: int = 5) -> list[Messages]:
 
 async def get_messages_ready_for_posting(limit: int = 5) -> list[Messages]:
     """
-    Получает обработанные AI сообщения готовые для публикации.
+    Получает сообщения из базы данных, готовые для публикации в Telegram канал.
     
     Args:
-        limit: максимальное количество сообщений для получения
+        limit (int): Максимальное количество сообщений для получения. По умолчанию 5.
+        
     Returns:
-        Список сообщений готовых к публикации
+        list[Messages]: Список объектов Messages, готовых для публикации.
+        
+    Действия:
+    1. Получает сообщения со статусом AI_PROCESSED из базы данных
+    2. Проверяет наличие обработанного AI текста в сообщениях
+    3. Сортирует по дате (старые в начале)
+    4. Ограничивает количество записей параметром limit
     """
+    
     logging.info("Получение сообщений для постинга (статус AI_PROCESSED)...")
     
     def _get_sync():
@@ -144,9 +175,23 @@ async def get_messages_ready_for_posting(limit: int = 5) -> list[Messages]:
 
 async def _fetch_ai_response(message_id: int, text_to_process: str, service_url: str) -> str | None:
     """
-    Асинхронно отправляет текст на AI сервис и возвращает обработанный результат.
-    Выбрасывает исключения httpx при ошибках сети или HTTP.
+    Отправляет текст в AI сервис и получает обработанный ответ.
+    
+    Args:
+        message_id (int): ID сообщения в базе данных для логирования
+        text_to_process (str): Исходный текст для обработки AI
+        service_url (str): URL эндпоинта AI сервиса
+        
+    Returns:
+        str | None: Обработанный AI текст или None в случае ошибки/пустого ответа
+        
+    Действия:
+    1. Отправляет POST запрос в AI сервис с текстом
+    2. Получает и проверяет ответ от сервиса
+    3. Извлекает обработанный текст из ответа
+    4. Логирует результаты
     """
+    
     logging.info(f"ID {message_id}: Отправка в AI ({service_url}): {text_to_process[:30]}...")
     
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -185,12 +230,25 @@ async def _fetch_ai_response(message_id: int, text_to_process: str, service_url:
 
 async def simplified_process_message(message_id: int, original_text: str):
     """
-    Отправляет текст в AI, получает ответ и обновляет запись в БД.
-
+    Упрощенная обработка сообщения через AI сервис.
+    
     Args:
-        message_id: ID сообщения в базе данных
-        original_text: Исходный текст сообщения для обработки AI сервисом
+        message_id (int): ID сообщения в базе данных
+        original_text (str): Исходный текст сообщения для обработки
+        
+    Действия:
+    1. Проверяет входные данные (текст и URL AI сервиса)
+    2. Обновляет статус на "отправляется в AI"
+    3. Отправляет текст в AI сервис через _fetch_ai_response()
+    4. Обрабатывает возможные ошибки (сеть, HTTP, прочие)
+    5. Обновляет статус и результат в БД
+    
+    Raises:
+        httpx.RequestError: При ошибках сети
+        httpx.HTTPStatusError: При ошибках HTTP от AI сервиса
+        Exception: При прочих ошибках обработки
     """
+    
     logging.info(f"Обработка сообщения ID {message_id} через AI...")
     new_status = NewsStatus.ERROR_AI_PROCESSING
     processed_text_from_ai = None
@@ -262,8 +320,19 @@ async def simplified_process_message(message_id: int, original_text: str):
 
 async def main_logic(bot_for_posting: Bot | None):
     """
-    Основная логика: сначала обработка AI, затем постинг.
+    Основная логика обработки и публикации сообщений.
+    
+    Args:
+        bot_for_posting (Bot | None): Инстанс бота для публикации сообщений.
+            Если None, этап публикации будет пропущен.
+            
+    Действия:
+    1. Запускает обработку сообщений через AI
+    2. Делает паузу между этапами
+    3. Публикует обработанные сообщения в Telegram канал
+       (если предоставлен бот и ID канала)
     """
+    
     logging.info("main_logic запущен")
 
     # Этап 1: Обработка AI
@@ -284,8 +353,18 @@ async def main_logic(bot_for_posting: Bot | None):
 
 async def run_periodic_tasks(bot_for_posting: Bot | None):
     """
-    Запускает периодическое выполнение основной логики.
+    Запускает периодические задачи обработки и публикации сообщений.
+    
+    Args:
+        bot_for_posting (Bot | None): Инстанс бота для публикации сообщений.
+            Если None, этап публикации будет пропущен.
+            
+    Действия:
+    1. Запускает бесконечный цикл выполнения основной логики
+    2. Делает паузу 10 секунд между итерациями
+    3. Логирует каждую итерацию
     """
+    
     logging.info("Запуск run_periodic_tasks в posting_worker...")
     while True:
         await main_logic(bot_for_posting)
@@ -299,7 +378,22 @@ async def _update_message_status(
     status: NewsStatus, 
     processed_text: str | None = None
 ):
-    """Обновляет статус сообщения в БД"""
+    """
+    Обновляет статус сообщения в базе данных.
+    
+    Args:
+        message_id (int): ID сообщения для обновления
+        status (NewsStatus): Новый статус для установки
+        processed_text (str | None): Обработанный текст сообщения.
+            Если None, поле ai_processed_text не обновляется.
+            
+    Действия:
+    1. Создает словарь значений для обновления с новым статусом
+    2. Если передан processed_text, добавляет его в значения для обновления
+    3. Выполняет SQL-запрос на обновление через синхронную функцию
+    4. Коммитит изменения в БД
+    """
+    
     def _update_sync():
         with SessionLocal() as session:
             update_values = {"status": status}
@@ -318,7 +412,24 @@ async def _update_message_status(
 
 
 async def _process_ai_messages():
-    """Обработка сообщений через AI"""
+    """
+    Обрабатывает сообщения с помощью AI.
+    
+    Действия:
+    1. Получает до 2-х сообщений из БД, готовых к AI обработке
+    2. Для каждого сообщения:
+       - Проверяет наличие текста
+       - Если текст есть - обрабатывает через simplified_process_message()
+       - Если текста нет - помечает ошибкой
+    3. Делает паузу 1 секунду между обработкой сообщений
+    
+    Returns:
+        None
+        
+    Raises:
+        Ошибки пробрасываются наверх для обработки в вызывающем коде
+    """
+    
     messages = await get_messages_for_ai_processing(limit=2)
     
     if not messages:
@@ -341,7 +452,26 @@ async def _process_ai_messages():
 
 
 async def _process_posting_messages(bot: Bot):
-    """Обработка постинга сообщений"""
+    """
+    Обрабатывает сообщения для постинга в Telegram канал.
+    
+    Args:
+        bot (Bot): Экземпляр бота Telegram для отправки сообщений
+        
+    Действия:
+    1. Получает до 2-х сообщений из БД, готовых к постингу
+    2. Для каждого сообщения:
+       - Проверяет наличие обработанного AI текста
+       - Если текст есть - отправляет в Telegram канал
+       - Обновляет статус сообщения в БД (POSTED или ERROR_POSTING)
+    3. Делает паузу 1 секунду между отправкой сообщений
+    
+    Returns:
+        None
+        
+    Raises:
+        Ошибки пробрасываются наверх для обработки в вызывающем коде
+    """
     messages = await get_messages_ready_for_posting(limit=2)
     
     if not messages:
@@ -373,6 +503,12 @@ async def _process_posting_messages(bot: Bot):
 
 
 def create_bot():
+    """
+    Создает и возвращает экземпляр бота для постинга.
+    
+    Returns:
+        Bot: Экземпляр бота для постинга
+    """
     token = os.getenv("TELEGRAM_BOT_TOKEN") or None
     if not token: 
         raise ValueError("Token value getting error! token is None")
@@ -384,6 +520,14 @@ def create_bot():
 
 
 def close_bot_session():
+    """
+    Закрывает сессию бота.
+    
+    Действия:
+    1. Проверяет наличие сессии и ее закрытость
+    2. Если сессия открыта, закрывает ее
+    3. Логирует закрытие сессии
+    """
     if (
         bot_instance and 
         hasattr(bot_instance, 'session') and 
@@ -404,6 +548,14 @@ def close_bot_session():
 
 
 if __name__ == "__main__":
+    """
+    Запускает основной скрипт posting_worker.py.
+    
+    Действия:
+    1. Создает экземпляр бота для постинга
+    2. Запускает периодические задачи
+    3. Логирует завершение работы
+    """
     logging.info("Запуск posting_worker.py как отдельного скрипта...")
     
     bot_instance = create_bot()

@@ -205,5 +205,10 @@ async def cmd_all_channels(message: Message):
     
     await message.answer("\n\n".join(channels_list), parse_mode="HTML")
     
-        
 
+@router.message(Command("deactivate_target"))
+async def cmd_deactivate_target(message: Message):
+    active_target_chat_id_str = get_active_target_chat_id_str()
+    if not active_target_chat_id_str:
+        await message.answer("Целевой канал не установлен.")
+        return
