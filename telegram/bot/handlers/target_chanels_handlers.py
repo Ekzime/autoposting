@@ -5,7 +5,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 import logging
 
-from database.channels import set_active_target
+from database.channels import (
+    set_active_target, 
+    get_active_target_chat_id_str,
+    deactivate_target_by_id,
+    get_active_target_info,
+    get_all_target_channels
+)
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -32,14 +38,14 @@ text = """Для добавления канала в бота, вам нужн�
 
 #######################################################################
 #                                                                     #
-#                    Set Target Channel                               #
+#                    Handle Target Channel                            #
 #                                                                     #
 #######################################################################
 
-@router.message(Command("set_ch"))
-async def set_channel(message: Message, state: FSMContext):
+@router.message(Command("set_new_target"))
+async def cmd_set_channel(message: Message, state: FSMContext):
     """
-    Обработчик команды /set_ch для добавления нового канала.
+    Обработчик команды /set_new_target для добавления нового канала.
     
     Args:
         message (Message): Объект сообщения от пользователя
@@ -51,7 +57,7 @@ async def set_channel(message: Message, state: FSMContext):
     3. Запрашивает ID канала или username
     4. Устанавливает состояние ожидания ID канала
     """
-    logger.info(f"Получена команда /set_ch от пользователя {message.from_user.id}")
+    logger.info(f"Получена команда /set_new_target от пользователя {message.from_user.id}")
     
     # Отправляем инструкцию пользователю
     await message.answer(text, parse_mode="HTML")
@@ -60,7 +66,7 @@ async def set_channel(message: Message, state: FSMContext):
 
 
 @router.message(SetChannelState.waiting_for_channel_id)
-async def process_channel_id(message: Message, state: FSMContext):
+async def cmd_process_channel_id(message: Message, state: FSMContext):
     """
     Обработчик для получения ID канала или username.
     
@@ -117,7 +123,7 @@ async def process_channel_id(message: Message, state: FSMContext):
 
 
 @router.message(SetChannelState.waiting_for_title)
-async def process_channel_title(message: Message, state: FSMContext):
+async def cmd_process_channel_title(message: Message, state: FSMContext):
     """
     Обработчик для получения названия канала.
     
@@ -168,4 +174,36 @@ async def process_channel_title(message: Message, state: FSMContext):
         logger.info("Состояние очищено")
 
 
-def get_active_target_channels():
+@router.message(Command("get_all_targets"))
+async def cmd_all_channels(message: Message):
+    """
+    Обработчик команды /get_all_targets для получения списка всех целевых каналов.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        
+    Действия:
+    1. Получает список всех целевых каналов из БД
+    2. Если список пустой - отправляет сообщение об отсутствии каналов
+    3. Формирует текстовый список с информацией о каждом канале:
+       - ID канала
+       - Название
+       - Статус активности (✅ или ❌)
+    4. Отправляет сформированный список пользователю
+    """
+    all_target_channels = get_all_target_channels()
+    if not all_target_channels:
+        await message.answer("Целевых каналов нет.")
+        return
+    
+    channels_list = ["<b>📋 Список всех целевых каналов:</b>"]
+    for channel in all_target_channels:
+        status = "✅ <b>Активен</b>" if channel['is_active'] else "❌ <b>Неактивен</b>"
+        channels_list.append(f"<b>🆔 ID канала:</b> <code>{channel['target_chat_id']}</code>\n"
+                           f"<b>📝 Название:</b> {channel['target_title']}\n"
+                           f"<b>📊 Статус:</b> {status}\n")
+    
+    await message.answer("\n\n".join(channels_list), parse_mode="HTML")
+    
+        
+

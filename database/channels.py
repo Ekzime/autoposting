@@ -197,3 +197,32 @@ def deactivate_target_by_id(target_chat_id_to_deactivate: str) -> bool:
             print(f"got error on deactivate_target_by_id: {e}")
             return False
             
+def get_all_target_channels() -> list[dict]:
+    """
+    Получает список всех целевых каналов из базы данных.
+    
+    Returns:
+        list[dict]: Список словарей с информацией о каналах, где каждый словарь содержит:
+            - id (int): Идентификатор записи в БД
+            - target_chat_id (str): ID канала в Telegram
+            - target_title (str): Название канала
+            - is_active (bool): Флаг активности канала
+            - added_at (str): Дата и время добавления в ISO формате
+            
+    Действия:
+    1. Выполняет запрос к БД для получения всех записей PostingTarget
+    2. Преобразует каждую запись в словарь с нужными полями
+    3. Возвращает список словарей
+    """
+    with session_scope() as db:
+        targets = db.execute(select(PostingTarget)).scalars().all()
+        return [
+            {
+                "id": t.id,
+                "target_chat_id": t.target_chat_id,
+                "target_title": t.target_title,
+                "is_active": t.is_active,
+                "added_at": t.added_at.isoformat() if t.added_at else None
+            }
+            for t in targets
+        ]
