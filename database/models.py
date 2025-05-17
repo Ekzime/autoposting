@@ -99,7 +99,7 @@ class Messages(BaseModel):
 
 
 
-class PostingtTarget(BaseModel):
+class PostingTarget(BaseModel):
     __tablename__ = "posting_targets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -150,15 +150,33 @@ async def message_handler(event: NewMessage.Event):
     else: 
         path = None
     
+    # Извлечение числового идентификатора канала из объекта peer_id
+    if isinstance(message.peer_id, PeerChannel):
+        channel_id = message.peer_id.channel_id
+    elif isinstance(message.peer_id, PeerChat):
+        channel_id = message.peer_id.chat_id
+    elif isinstance(message.peer_id, PeerUser):
+        channel_id = message.peer_id.user_id
+    else:
+        channel_id = getattr(message.peer_id, 'channel_id', None) or getattr(message.peer_id, 'chat_id', None) or getattr(message.peer_id, 'user_id', None)
+        if channel_id is None:
+            print(f"Неизвестный тип peer_id: {type(message.peer_id)}")
+            return
+
+    # Проверяем существование канала в БД перед добавлением сообщения
+    if not get_channel_by_peer_id(channel_id):
+        print(f"Канал с ID {channel_id} не найден в БД. Сообщение не будет добавлено.")
+        return
+    
     # Добавление сообщения в базу данных
     add_message(
-        channel_id = message.peer_id,
+        channel_id = channel_id,
         message_id = message.id,
         views = await get_message_views(client, message),
         date = message.date,
-        text = message.message,
-        photo_path = ...,
-        links = await check_message_for_links(message)
+        text = message.text,
+        photo_path = path,
+        links = check_message_for_links(message)
     )
 
     TOTAL_HANDLED += 1
@@ -174,9 +192,9 @@ async def main():
     await client.start()
     
     # Пример использования парсера
-    await parse_messages("https://t.me/incrypted", limit=10)
-    for message in get_all_messages():
-        print(message)
+    # await parse_messages("https://t.me/incrypted", limit=10)
+    # for message in get_all_messages():
+    #     print(message)
 
     await client.run_until_disconnected()
 

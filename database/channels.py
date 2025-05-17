@@ -7,6 +7,21 @@ from sqlalchemy import select, Select, update
 
 
 def add_channel(channel: Channel) -> None:
+    """
+    Добавляет новый канал в базу данных.
+    
+    Args:
+        channel (Channel): Объект канала Telethon, содержащий информацию о канале
+        
+    Действия:
+    1. Проверяет существование канала в БД по peer_id
+    2. Если канал уже существует - пропускает добавление
+    3. Создает новую запись в таблице Channels с данными канала
+    4. Коммитит транзакцию
+    
+    Raises:
+        Exception: При ошибках добавления в БД выполняется откат транзакции
+    """
     with Session(engine) as connection:
         if get_channel_by_peer_id(channel.id):
             print(f"channel {channel.title} already exist in db")
@@ -26,12 +41,37 @@ def add_channel(channel: Channel) -> None:
 
 
 def get_all_channels() -> list[Channels]:
+    """
+    Получает список всех каналов из базы данных.
+    
+    Returns:
+        list[Channels]: Список объектов Channels, содержащих информацию о каналах
+        
+    Действия:
+    1. Создает сессию подключения к БД
+    2. Выполняет SELECT-запрос для получения всех записей из таблицы Channels
+    3. Возвращает список объектов Channels
+    """
     with Session(engine) as connection:
         channels = connection.scalars(select(Channels)).all()
         return channels
     
 
 def get_channel_by_peer_id(peer_id: int) -> Channels | None:
+    """
+    Получает канал из базы данных по его peer_id.
+    
+    Args:
+        peer_id (int): Идентификатор канала в Telegram
+        
+    Returns:
+        Channels | None: Объект канала из БД или None, если канал не найден
+        
+    Действия:
+    1. Создает сессию подключения к БД
+    2. Выполняет SELECT-запрос для поиска канала по peer_id
+    3. Возвращает найденный канал или None
+    """
     with Session(engine) as connection:
         query: Select = select(Channels).where(Channels.peer_id == peer_id)
         result = connection.scalars(query).one_or_none()
@@ -41,7 +81,22 @@ def get_channel_by_peer_id(peer_id: int) -> Channels | None:
 # Методы для работы с таблицей PostingTarget
 # =========================================
 def set_active_target(target_chat_id_str: str, target_title: str | None) -> PostingTarget | None:
-    """ Устанавливает или обновляет АКТИВНУЮ цель для постинга. """
+    """
+    Устанавливает или обновляет активную цель для постинга.
+    
+    Args:
+        target_chat_id_str (str): ID целевого чата/канала в виде строки
+        target_title (str | None): Название для целевого чата/канала. Может быть None
+        
+    Returns:
+        PostingTarget | None: Объект PostingTarget с установленными параметрами или None в случае ошибки
+        
+    Действия:
+    1. Деактивирует все существующие активные цели
+    2. Ищет запись с указанным chat_id
+    3. Если запись найдена - обновляет название и активирует её
+    4. Если записи нет - создает новую активную запись
+    """
     try:
         with session_scope() as db:
             # Деактивируем все существующие активные цели для постинга
@@ -77,8 +132,18 @@ def set_active_target(target_chat_id_str: str, target_title: str | None) -> Post
         print(f"got error on set_active_target: {e}")
         return None
         
-def get_active_target_info() -> PostingTarget | None: # Переименовал для ясности, что возвращает весь объект
-    """ Возвращает объект PostingTarget для текущей активной цели или None. """
+def get_active_target_info() -> PostingTarget | None:
+    """
+    Получает информацию об активной цели для постинга.
+    
+    Returns:
+        PostingTarget | None: Объект PostingTarget с информацией об активной цели 
+                            или None если активная цель не найдена или произошла ошибка
+                            
+    Действия:
+    1. Выполняет запрос к БД для поиска активной цели (is_active=True)
+    2. Возвращает найденный объект PostingTarget или None
+    """
     try:
         with session_scope() as db:
             return db.execute(
@@ -89,13 +154,36 @@ def get_active_target_info() -> PostingTarget | None: # Переименовал
         return None
     
 def get_active_target_chat_id_str() -> str | None:
-    """ Получает target_chat_id текущей активной цели или None. """
+    """
+    Получает ID активного целевого канала в виде строки.
+    
+    Returns:
+        str | None: ID активного целевого канала в виде строки или None, если активный канал не найден
+        
+    Действия:
+    1. Получает информацию об активном канале через get_active_target_info()
+    2. Возвращает target_chat_id активного канала или None
+    """
     active_target = get_active_target_info() 
     if active_target:
         return active_target.target_chat_id
     return None
 
 def deactivate_target_by_id(target_chat_id_to_deactivate: str) -> bool:
+    """
+    Деактивирует целевой канал по его ID.
+    
+    Args:
+        target_chat_id_to_deactivate (str): ID канала, который нужно деактивировать
+        
+    Returns:
+        bool: True если деактивация прошла успешно, False в случае ошибки
+        
+    Действия:
+    1. Находит запись канала в БД по target_chat_id
+    2. Устанавливает флаг is_active в False
+    3. Сохраняет изменения
+    """
     with session_scope() as db:
         try:
             db.execute(

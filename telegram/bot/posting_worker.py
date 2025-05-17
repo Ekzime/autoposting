@@ -374,9 +374,12 @@ async def _process_posting_messages(bot: Bot):
 
 def create_bot():
     token = os.getenv("TELEGRAM_BOT_TOKEN") or None
-    if not token: raise ValueError("Token value getting error! token is None")
+    if not token: 
+        raise ValueError("Token value getting error! token is None")
+    
     bot_instance = Bot(token=token)
     logging.info(f"Создан бот для постинга (токен: ...{token[-4:]}).")
+    
     return bot_instance
 
 
