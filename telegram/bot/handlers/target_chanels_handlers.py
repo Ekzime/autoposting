@@ -1,10 +1,16 @@
+import logging
+
+# Библиотеки для работы с ботом
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-import logging
 
+# Тексты для сообщений
+from telegram.texts.text_for_messages import text_for_set_new_target
+
+# Библиотеки для работы с базой данных
 from database.channels import (
     set_active_target, 
     get_active_target_chat_id_str,
@@ -18,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
+
 class SetChannelState(StatesGroup):
     # Состояние ожидания ID канала или username
     waiting_for_channel_id = State()
@@ -25,23 +32,15 @@ class SetChannelState(StatesGroup):
     waiting_for_title = State() 
 
 
-text = """Для добавления канала в бота, вам нужно отправить:
-
-1️⃣ Для публичного канала:
-   Юзернейм канала, например: <code>@channel_name</code>
-
-2️⃣ Для приватного канала:
-   ID канала с префиксом -100, например: <code>-1001234567890</code>
-
-❗️ Убедитесь, что бот добавлен в канал как администратор."""
+class DeactivateTargetState(StatesGroup):
+    waiting_for_target_id = State()
 
 
 #######################################################################
 #                                                                     #
-#                    Handle Target Channel                            #
+#                    Set New Target Channel                           #
 #                                                                     #
 #######################################################################
-
 @router.message(Command("set_new_target"))
 async def cmd_set_channel(message: Message, state: FSMContext):
     """
@@ -60,7 +59,7 @@ async def cmd_set_channel(message: Message, state: FSMContext):
     logger.info(f"Получена команда /set_new_target от пользователя {message.from_user.id}")
     
     # Отправляем инструкцию пользователю
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text_for_set_new_target, parse_mode="HTML")
     await message.answer("Введите ID канала или @username:")
     await state.set_state(SetChannelState.waiting_for_channel_id)
 
@@ -173,7 +172,11 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
         await state.clear()
         logger.info("Состояние очищено")
 
-
+#######################################################################
+#                                                                     #
+#                    View All Target Channels                         #
+#                                                                     #
+#######################################################################
 @router.message(Command("get_all_targets"))
 async def cmd_all_channels(message: Message):
     """
@@ -205,10 +208,49 @@ async def cmd_all_channels(message: Message):
     
     await message.answer("\n\n".join(channels_list), parse_mode="HTML")
     
+#######################################################################
+#                                                                     #
+#              Handle Target Channel Activation Status                #
+#                                                                     #
+#######################################################################
+@router.message(Command("get_active_target"))
+async def cmd_get_active_target(message: Message):
+    """
+    Обработчик команды /get_active_target для получения информации об активном целевом канале.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        
+    Действия:
+    1. Получает информацию об активном канале из БД
+    2. Если активный канал найден - отправляет информацию о нем
+    3. Если активного канала нет - отправляет соответствующее сообщение
+    """
+    active_target = get_active_target_info()
+    if active_target:
+        await message.answer(
+            f"📌 <b>Активный целевой канал:</b>\n\n"
+            f"<b>🆔 ID канала:</b> <code>{active_target.target_chat_id}</code>\n"
+            f"<b>📝 Название:</b> {active_target.target_title}",
+            parse_mode="HTML"
+        )
+    else:
+        await message.answer("❌ Активный целевой канал не установлен.")
 
 @router.message(Command("deactivate_target"))
-async def cmd_deactivate_target(message: Message):
-    active_target_chat_id_str = get_active_target_chat_id_str()
-    if not active_target_chat_id_str:
-        await message.answer("Целевой канал не установлен.")
-        return
+async def cmd_deactivate_target(message: Message, state: FSMContext):
+    """
+    Обработчик команды /deactivate_target для деактивации целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Объект состояния FSM для хранения данных между этапами
+        
+    Действия:
+    1. Отправляет пользователю запрос на ввод ID или @username канала
+    2. Устанавливает состояние DeactivateTargetState.waiting_for_target_id
+       для ожидания ввода идентификатора канала
+    """
+    await message.answer("Введите ID или @username канала для деактивации:")
+    await state.set_state(DeactivateTargetState.waiting_for_target_id)
+
