@@ -1,4 +1,5 @@
 import logging
+import asyncio
 
 # Библиотеки для работы с ботом
 from aiogram import Router, F
@@ -154,6 +155,14 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
         await message.answer("Вы отправили пустое название. Пожалуйста, введите понятное название для канала:")
         return
     
+    def _db_call_sync():
+        """
+        Обертка для синхронного вызова set_active_target в отдельном потоке.
+        Нужна что бы не блокировать основной асинхронный поток бота при вызове set_active_target.
+        Предполагается, что set_active_target сама управляет сессией БД через with session_scope().
+        """
+        return set_active_target(target_id, title)
+
     try:
         # Получаем данные из состояния
         data = await state.get_data()
@@ -165,7 +174,9 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
             return
         
         # Сохраняем в БД
-        result = set_active_target(target_id, title)
+        # Выполняем синхронную функцию _db_call_sync в отдельном потоке через asyncio.to_thread,
+        # чтобы не блокировать основной поток бота во время работы с БД
+        result = await asyncio.to_thread(_db_call_sync)
         if result:
             await message.answer(f"Канал <b>{title}</b> ({target_id}) успешно установлен как целевой для публикации.", parse_mode="HTML")
             logger.info(f"Канал {title} ({target_id}) успешно установлен")
@@ -311,7 +322,7 @@ async def process_deactivate_target(message: Message, state: FSMContext):
 #                    Delete Target Channel                            #
 #                                                                     #
 #######################################################################
-@router.message(Command("delete_targer"))
+@router.message(Command("delete_target"))
 async def cmd_delete_target(message:Message, state:FSMContext):
     """
     Обработчик команды /delete_target для удаления целевого канала.
@@ -363,3 +374,14 @@ async def process_delete_target(message:Message, state:FSMContext):
         await message.answer(f"❌ Произошла ошибка при удалении канала: {str(e)}")
     
     await state.clear()
+
+
+# TODO:
+# - Добавить проверку на наличие канала в базе данных перед установкой нового целевого канала.
+# - Добавить проверку на наличие канала в базе данных перед деактивацией целевого канала.
+# - Добавить проверку на наличие канала в базе данных перед удалением целевого канала.
+# - Добавить проверку на наличие канала в базе данных перед получением информации о целевом канале.
+# - Добавить проверку на наличие канала в базе данных перед получением списка всех целевых каналов.
+# - Добавить проверку на наличие канала в базе данных перед получением информации о целевом канале.
+
+
