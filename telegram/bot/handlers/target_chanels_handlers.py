@@ -18,7 +18,8 @@ from database.channels import (
     deactivate_target_by_id,
     get_active_target_info,
     get_all_target_channels,
-    delete_target_channel
+    delete_target_channel,
+    activate_target_by_id
 )
 
 # Настройка логгера
@@ -29,17 +30,21 @@ router = Router()
 
 class SetChannelState(StatesGroup):
     """Состояния для процесса установки нового целевого канала"""
-    waiting_for_channel_id = State()
-    waiting_for_title = State() 
+    waiting_for_channel_id_str = State()
+    waiting_for_title = State()
 
 
 class DeactivateTargetState(StatesGroup):
     """Состояния для процесса деактивации целевого канала"""
-    waiting_for_target_id = State()
+    waiting_for_target_id_str = State()
 
 class DeleteTargetState(StatesGroup):
     """Состояния для процесса удаления целевого канала"""
-    waiting_for_target_id = State()
+    waiting_for_target_id_str = State()
+
+class ActivateTargetState(StatesGroup):
+    """Состояния для процесса активации целевого канала"""
+    waiting_for_target_id_str = State()
 
 
 #######################################################################
@@ -67,10 +72,10 @@ async def cmd_set_channel(message: Message, state: FSMContext):
     # Отправляем инструкцию пользователю
     await message.answer(text_for_set_new_target, parse_mode="HTML")
     await message.answer("Введите ID канала или @username:")
-    await state.set_state(SetChannelState.waiting_for_channel_id)
+    await state.set_state(SetChannelState.waiting_for_channel_id_str)
 
 
-@router.message(SetChannelState.waiting_for_channel_id)
+@router.message(SetChannelState.waiting_for_channel_id_str)
 async def cmd_process_channel_id(message: Message, state: FSMContext):
     """
     Обработчик для получения ID канала или username.
@@ -280,10 +285,10 @@ async def cmd_deactivate_target(message: Message, state: FSMContext):
        для ожидания ввода идентификатора канала
     """
     await message.answer("Введите ID или @username канала для деактивации:")
-    await state.set_state(DeactivateTargetState.waiting_for_target_id)
+    await state.set_state(DeactivateTargetState.waiting_for_target_id_str)
 
 
-@router.message(DeactivateTargetState.waiting_for_target_id)
+@router.message(DeactivateTargetState.waiting_for_target_id_str)
 async def process_deactivate_target(message: Message, state: FSMContext):
     """
     Обработчик для получения ID или @username канала для деактивации.
@@ -346,10 +351,10 @@ async def cmd_delete_target(message:Message, state:FSMContext):
        для ожидания ввода идентификатора канала
     """
     await message.answer("Введите ID канала для удаления:")
-    await state.set_state(DeleteTargetState.waiting_for_target_id)
+    await state.set_state(DeleteTargetState.waiting_for_target_id_str)
 
 
-@router.message(DeleteTargetState.waiting_for_target_id)
+@router.message(DeleteTargetState.waiting_for_target_id_str)
 async def process_delete_target(message:Message, state:FSMContext):
     """
     Обработчик для получения ID канала и его удаления.
@@ -387,9 +392,59 @@ async def process_delete_target(message:Message, state:FSMContext):
     
     await state.clear()
 
+#######################################################################
+#                                                                     #
+#                    Activate Target Channel                          #
+#                                                                     #
+#######################################################################
+@router.message(Command("activate_target"))
+async def cmd_activate_target(message:Message, state:FSMContext):
+    """
+    Обработчик команды /activate_target для активации целевого канала.
+    """
+    await message.answer("Сейчас может быть только один активный целевой канал. Мульти-задачность пока не поддерживается.")
+    await message.answer("Введите ID канала для активации:")
+    await state.set_state(ActivateTargetState.waiting_for_target_id_str)
+
+
+@router.message(ActivateTargetState.waiting_for_target_id_str)
+async def process_activate_target(message:Message, state:FSMContext):
+    """
+    Обработчик для получения ID канала и его активации.
+
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Объект состояния FSM для хранения данных между этапами
+
+    Действия:
+    1. Получает ID канала из сообщения
+    2. Проверяет корректность введенного ID
+    3. Активирует целевой канал в БД
+    4. Отправляет пользователю сообщение о результате операции
+    5. Очищает состояние FSM
+    """
+    target_chat_id_str = message.text.strip()
+
+    def _activate_sync():
+        return activate_target_by_id(target_chat_id_str)
+    
+    if not target_chat_id_str:
+        await message.answer("❌ Вы не ввели ID канала.")
+        await state.clear()
+        return
+
+    try:
+        success = await asyncio.to_thread(_activate_sync)
+
+        if success:
+            await message.answer(f"✅ Целевой канал с ID {target_chat_id_str} успешно активирован.")
+        else:
+            await message.answer(f"❌ Канал с указанным ID не найден или уже активирован.")
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при активации канала: {str(e)}")
+
 
 # TODO:
-# - Дописать хендлер для активации целевого канала.
 # - Добавить проверку на наличие канала в базе данных перед установкой нового целевого канала.
 # - Добавить проверку на наличие канала в базе данных перед деактивацией целевого канала.
 # - Добавить проверку на наличие канала в базе данных перед удалением целевого канала.

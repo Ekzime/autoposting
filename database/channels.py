@@ -227,6 +227,8 @@ def get_all_target_channels() -> list[dict]:
     """
     with session_scope() as db:
         targets = db.execute(select(PostingTarget)).scalars().all()
+        if not targets:
+                return False
         return [
             {
                 "id": t.id,
@@ -267,3 +269,43 @@ def delete_target_channel(target_chat_id: str) -> bool:
         except Exception as e:
             print(f"got error on delete_target_channel: {e}")
             return False
+
+def activate_target_by_id(target_chat_id_str: str) -> bool:
+    """
+    Активирует целевой канал по его ID и деактивирует все остальные.
+    
+    Args:
+        target_chat_id_str (str): ID канала, который нужно активировать
+        
+    Returns:
+        bool: True если активация прошла успешно, False в случае ошибки
+        
+    Действия:
+    1. Деактивирует все существующие активные цели
+    2. Находит запись канала в БД по target_chat_id
+    3. Устанавливает флаг is_active в True для найденного канала
+    4. Сохраняет изменения
+    """
+    with session_scope() as db:
+        try:
+            # Сначала деактивируем все активные каналы
+            db.execute(
+                update(PostingTarget)
+                .where(PostingTarget.is_active == True)
+                .values(is_active=False)
+            )
+            
+            # Затем ищем и активируем нужный канал
+            target = db.execute(
+                select(PostingTarget).where(PostingTarget.target_chat_id == target_chat_id_str)
+            ).scalar_one_or_none()
+            
+            if not target:
+                return False
+            
+            target.is_active = True
+            return True
+        except Exception as e:
+            print(f"got error on activate_target_by_id: {e}")
+            return False
+    
