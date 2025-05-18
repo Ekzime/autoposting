@@ -28,7 +28,6 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 
 # Модель для валидации входных данных
 class PostBatch(BaseModel):
-    # Список строк с текстами постов
     posts: List[str]
 
 # Инициализация FastAPI приложения
