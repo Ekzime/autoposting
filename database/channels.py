@@ -208,7 +208,7 @@ def deactivate_target_by_id(target_chat_id_to_deactivate: str) -> bool:
             print(f"got error on deactivate_target_by_id: {e}")
             return False
             
-def get_all_target_channels() -> list[dict]:
+def get_all_target_channels() -> list[dict] | []:
     """
     Получает список всех целевых каналов из базы данных.
     
@@ -227,8 +227,7 @@ def get_all_target_channels() -> list[dict]:
     """
     with session_scope() as db:
         targets = db.execute(select(PostingTarget)).scalars().all()
-        if not targets:
-                return False
+        if not targets: return []
         return [
             {
                 "id": t.id,
@@ -239,6 +238,7 @@ def get_all_target_channels() -> list[dict]:
             }
             for t in targets
         ]
+
 
 def delete_target_channel(target_chat_id: str) -> bool:
     """

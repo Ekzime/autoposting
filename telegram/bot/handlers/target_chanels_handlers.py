@@ -8,9 +8,6 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
-# Тексты для сообщений
-from telegram.bot.texts.text_for_messages import text_for_set_new_target
-
 # Библиотеки для работы с базой данных
 from database.channels import (
     set_active_target, 
@@ -27,16 +24,11 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-#######################################################################
-#                                                                     #
-#                    FSM States                                       #
-#                                                                     #
-#######################################################################
+########## FSM States ##########
 class SetChannelState(StatesGroup):
     """Состояния для процесса установки нового целевого канала"""
     waiting_for_channel_id_str = State()
     waiting_for_title = State()
-
 
 class DeactivateTargetState(StatesGroup):
     """Состояния для процесса деактивации целевого канала"""
@@ -51,11 +43,8 @@ class ActivateTargetState(StatesGroup):
     waiting_for_target_id_str = State()
 
 
-#######################################################################
-#                                                                     #
-#                    Set New Target Channel                           #
-#                                                                     #
-#######################################################################
+
+########## Set New Target Channel ##########
 @router.message(Command("set_new_target"))
 async def cmd_set_channel(message: Message, state: FSMContext):
     """
@@ -74,7 +63,16 @@ async def cmd_set_channel(message: Message, state: FSMContext):
     logger.info(f"Получена команда /set_new_target от пользователя {message.from_user.id}")
     
     # Отправляем инструкцию пользователю
-    await message.answer(text_for_set_new_target, parse_mode="HTML")
+    text = """Для добавления таргетного канала в бота, вам нужно отправить:
+
+    1️⃣ Для публичного канала:
+       Юзернейм канала, например: <code>@channel_name</code>
+        (без @ в начале, только имя канала)
+    2️⃣ Для приватного канала:
+       ID канала с префиксом -100, например: <code>-1001234567890</code>
+
+    ❗️ Убедитесь, что бот добавлен в канал как администратор."""
+    await message.answer(text, parse_mode="HTML")
     await message.answer("Введите ID канала или @username:")
     await state.set_state(SetChannelState.waiting_for_channel_id_str)
 
@@ -98,44 +96,30 @@ async def cmd_process_channel_id(message: Message, state: FSMContext):
         ValueError: Если ID канала не удается преобразовать в число
         Exception: При других ошибках обработки
     """
-    channel_id = message.text.strip()
-    
-    # Проверка на пустой ввод
-    if not channel_id:
-        await message.answer("Вы отправили пустое сообщение. Пожалуйста, введите ID канала или @username.", parse_mode="HTML")
-        return
-    
     try:
-        # Пробуем преобразовать в число для случая с ID канала
-        try:
-            numeric_id = int(channel_id)
-            logger.info(f"Получен числовой ID канала: {numeric_id}")
-            target_id = str(numeric_id)
-            # Предлагаем базовое название для числового ID
-            suggested_title = f"Channel {numeric_id}"
-        except ValueError:
-            # Если не получилось преобразовать в число, значит это username
-            if channel_id.startswith('@'):
-                target_id = channel_id
-            else:
-                target_id = f"@{channel_id}"
-            # Предлагаем юзернейм как базовое название
-            suggested_title = channel_id
-            logger.info(f"Получен username канала: {target_id}")
-        
-        # Сохраняем ID в состоянии FSM
-        await state.update_data(target_id=target_id, suggested_title=suggested_title)
-        
-        # Переходим к вводу названия
+        if not message.text:
+            await message.answer("Вы отправили пустое сообщение. Пожалуйста, введите ID канала или @username.", parse_mode="HTML")
+            await state.clear()
+            return
+
+        channel_id = message.text.strip().replace("@", "")
+        if channel_id.isnumeric():
+            logger.info(f"Получен числовой ID канала: {channel_id}")
+            target_id = int(channel_id)
+
+        else:
+            logger.info(f"Получен username канала: @{channel_id}")
+            target_id = str(channel_id)
+            
+        await state.update_data(target_id=target_id)
         await message.answer(f"Теперь введите название для канала для отображения в боте {target_id}:")
         await state.set_state(SetChannelState.waiting_for_title)
 
-    except Exception as e:
-        await message.answer(f"Произошла ошибка при обработке ID канала: {str(e)}")
-        logger.error(f"Ошибка при обработке ID канала: {e}")
-        await state.clear()
+    except Exception:
+        await message.answer("Произошла ошибка при обработке ID канала. Пожалуйста, попробуйте еще раз.")
+        await state.clear()    
 
-
+    
 async def check_posting_bot_can_send(target_id_str: str) -> bool:
     """
     Проверяет, может ли постинг-бот отправлять сообщения в указанный канал.
@@ -169,8 +153,8 @@ async def check_posting_bot_can_send(target_id_str: str) -> bool:
         
         # Пытаемся получить информацию о чате
         chat = await temp_bot.get_chat(target_id_str)
-        
         # Если дошли до этой точки, значит бот имеет доступ к чату
+
         await temp_bot.session.close()
         return True
         
@@ -255,11 +239,9 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
     finally:
         await state.clear()
 
-#######################################################################
-#                                                                     #
-#                    View All Target Channels                         #
-#                                                                     #
-#######################################################################
+
+
+########## View All Target Channels ##########
 @router.message(Command("get_all_targets"))
 async def cmd_all_channels(message: Message):
     """
@@ -306,11 +288,8 @@ async def cmd_all_channels(message: Message):
     
     await message.answer("\n\n".join(channels_list), parse_mode="HTML")
     
-#######################################################################
-#                                                                     #
-#              Handle Target Channel Activation Status                #
-#                                                                     #
-#######################################################################
+
+########## Handle Target Channel Activation Status ##########
 @router.message(Command("view_targets"))
 async def cmd_view_targets(message: Message):
     def _get_target_sync():
@@ -327,11 +306,8 @@ async def cmd_view_targets(message: Message):
     else:
         await message.answer("❌ Активный целевой канал не установлен.")
 
-#######################################################################
-#                                                                     #
-#              Handle Target Channel Deactivation                     #
-#                                                                     #
-#######################################################################
+
+########## Handle Target Channel Deactivation ##########
 @router.message(Command("deactivate_target"))
 async def cmd_deactivate_target(message: Message, state: FSMContext):
     """
@@ -393,11 +369,7 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     await state.clear()
     
 
-#######################################################################
-#                                                                     #
-#                    Delete Target Channel                            #
-#                                                                     #
-#######################################################################
+########## Delete Target Channel ##########
 @router.message(Command("delete_target"))
 async def cmd_delete_target(message:Message, state:FSMContext):
     """
@@ -454,11 +426,8 @@ async def process_delete_target(message:Message, state:FSMContext):
     
     await state.clear()
 
-#######################################################################
-#                                                                     #
-#                    Activate Target Channel                          #
-#                                                                     #
-#######################################################################
+
+########## Activate Target Channel ##########
 @router.message(Command("activate_target"))
 async def cmd_activate_target(message:Message, state:FSMContext):
     """

@@ -38,6 +38,22 @@ from .telegram_requests import get_message_views
 from datetime import datetime
 
 
+
+class Parser:
+    def __init__(
+        self, 
+        session_name: str, 
+        api_id: int, 
+        api_hash: str,
+        owner_id: int | None = None
+    ):
+        self.session_name = session_name
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.client = TelegramClient(session_name, api_id, api_hash)
+        self.owner_id = None
+        
+    
 # Инициализация клиента Telegram
 client = TelegramClient(
     SESSION, 

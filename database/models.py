@@ -59,14 +59,15 @@ class NewsStatus(enum.Enum):
 
 
 
-class Channels(BaseModel):
+class Channel(BaseModel):
     __tablename__ = "channels"
 
     id:       Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True) # Уникальный идентификатор
     peer_id:  Mapped[int] = mapped_column(Integer, unique=True, nullable=True) # ID канала в Telegram
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=True) # Имя пользователя канала
     title:    Mapped[str] = mapped_column(String(255), nullable=False) # Название канала
-    
+
+    owner_id: Mapped[int] = mapped_column(Integer, ForeignKey("telegram_users.tg_id"), nullable=True) # ID владельца канала
     messages: Mapped[list[Messages]] = relationship("Messages", back_populates="channel") # Связь один-ко-многим с сообщениями
 
     
@@ -91,7 +92,7 @@ class Messages(BaseModel):
     status:     Mapped[NewsStatus]        = mapped_column(SQLAlchemyEnum(NewsStatus), default=NewsStatus.NEW, index=True)  # Статус обработки
     ai_processed_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # Текст после обработки ИИ
 
-    channel: Mapped[Channels] = relationship("Channels", back_populates="messages")  # Связь многие-к-одному с каналом
+    channel: Mapped[Channel] = relationship("Channels", back_populates="messages")  # Связь многие-к-одному с каналом
    
    
     def __repr__(self):
@@ -99,18 +100,19 @@ class Messages(BaseModel):
 
 
 
-class PostingTarget(BaseModel):
-    __tablename__ = "posting_targets"
+class TelegramUser(BaseModel):
+    __tablename__ = "telegram_users"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    target_chat_id: Mapped[str] = mapped_column(String(255), nullable=False, unique=True) # Храним как строку (@username или -100число)
-    target_title: Mapped[str | None] = mapped_column(String(255), nullable=True) # Название канала 
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Активна ли эта настройка
-    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True) # Уникальный идентификатор
+    tg_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True) # ID пользователя в Telegram
+    username: Mapped[str | None] = mapped_column(String(100), nullable=True) # Имя пользователя Telegram
+    first_name: Mapped[str | None] = mapped_column(String(100), nullable=True) # Имя пользователя Telegram
+    last_name: Mapped[str | None] = mapped_column(String(100), nullable=True) # Фамилия пользователя Telegram
+
+    managed_channels: Mapped[list[int, str]] = relationship("Channels", back_populates="manager") # Связь один-ко-многим с каналами
+
     def __repr__(self):
-        return f"<PostingTarget(id={self.id}, target_chat_id='{self.target_chat_id}', title='{self.target_title}')>"
-
+        return f"<TelegramUser(id={self.id}, tg_id={self.tg_id}, username='{self.username}')>"
 
 
 # Создание всех таблиц в базе данных
