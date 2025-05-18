@@ -2,7 +2,7 @@ from telethon.tl.types import Channel
 from database.manager import session_scope
 from database.models import Channels, engine, PostingTarget
 from sqlalchemy.orm import Session
-from sqlalchemy import select, Select, update, delete
+from sqlalchemy import select, Select, update
 
 
 
@@ -132,27 +132,38 @@ def set_active_target(target_chat_id_str: str, target_title: str | None) -> Post
         print(f"got error on set_active_target: {e}")
         return None
         
-def get_active_target_info() -> PostingTarget | None:
+def get_active_target_info() -> dict | None:
     """
     Получает информацию об активной цели для постинга.
     
     Returns:
-        PostingTarget | None: Объект PostingTarget с информацией об активной цели 
-                            или None если активная цель не найдена или произошла ошибка
-                            
+        dict | None: Словарь с информацией об активной цели 
+                    или None если активная цель не найдена или произошла ошибка
+                    
     Действия:
     1. Выполняет запрос к БД для поиска активной цели (is_active=True)
-    2. Возвращает найденный объект PostingTarget или None
+    2. Возвращает словарь с данными или None
     """
-    try:
-        with session_scope() as db:
-            return db.execute(
+    with session_scope() as db:
+        try:
+            target = db.execute(
                 select(PostingTarget).filter_by(is_active=True)
             ).scalar_one_or_none()
-    except Exception as e:
-        print(f"got error on get_active_target_info: {e}")
-        return None
-    
+            
+            if not target:
+                return None
+                
+            return {
+                "id": target.id,
+                "target_chat_id": target.target_chat_id,
+                "target_title": target.target_title,
+                "is_active": target.is_active,
+                "added_at": target.added_at.isoformat() if target.added_at else None
+            }
+        except Exception as e:
+            print(f"got error on get_active_target_info: {e}")
+            return None
+        
 def get_active_target_chat_id_str() -> str | None:
     """
     Получает ID активного целевого канала в виде строки.
@@ -166,7 +177,7 @@ def get_active_target_chat_id_str() -> str | None:
     """
     active_target = get_active_target_info() 
     if active_target:
-        return active_target.target_chat_id
+        return active_target["target_chat_id"]
     return None
 
 def deactivate_target_by_id(target_chat_id_to_deactivate: str) -> bool:
@@ -229,34 +240,30 @@ def get_all_target_channels() -> list[dict]:
 
 def delete_target_channel(target_chat_id: str) -> bool:
     """
-    Удаляет целевой канал из PostingTarget по его Telegram ID.
+    Удаляет целевой канал из базы данных по его ID.
     
     Args:
-        target_chat_id (str): ID канала в Telegram
+        target_chat_id (str): ID канала, который нужно удалить
         
     Returns:
         bool: True если удаление прошло успешно, False в случае ошибки
         
     Действия:
     1. Находит запись канала в БД по target_chat_id
-    2. Удаляет найденную запись
+    2. Удаляет запись из БД
     3. Сохраняет изменения
     """
     with session_scope() as db:
         try:
-            # Находим и удаляем запись
-            result = db.execute(
-                delete(PostingTarget)
-                .where(PostingTarget.target_chat_id == target_chat_id)
-            )
+            target = db.execute(
+                select(PostingTarget).where(PostingTarget.target_chat_id == target_chat_id)
+            ).scalar_one_or_none()
             
-            # Проверяем, была ли удалена хотя бы одна запись
-            if result.rowcount > 0:
-                db.commit()
-                return True
-            else:
-                # Если записей с таким ID не найдено
+            if not target:
                 return False
+                
+            db.delete(target)
+            return True
         except Exception as e:
-            print(f"Error in delete_target_channel: {e}")
+            print(f"got error on delete_target_channel: {e}")
             return False
