@@ -16,7 +16,8 @@ from database.channels import (
     get_active_target_chat_id_str,
     deactivate_target_by_id,
     get_active_target_info,
-    get_all_target_channels
+    get_all_target_channels,
+    delete_target_channel
 )
 
 # Настройка логгера
@@ -26,6 +27,7 @@ router = Router()
 
 
 class SetChannelState(StatesGroup):
+    """Состояния для процесса установки нового целевого канала"""
     # Состояние ожидания ID канала или username
     waiting_for_channel_id = State()
     # Состояние ожидания названия канала
@@ -33,6 +35,11 @@ class SetChannelState(StatesGroup):
 
 
 class DeactivateTargetState(StatesGroup):
+    """Состояния для процесса деактивации целевого канала"""
+    waiting_for_target_id = State()
+
+class DeleteTargetState(StatesGroup):
+    """Состояния для процесса удаления целевого канала"""
     waiting_for_target_id = State()
 
 
@@ -276,9 +283,9 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     4. Отправляет пользователю сообщение об успешной деактивации
     5. Очищает состояние FSM
     """
-    target_chat_id = message.text.strip()
+    target_chat_id_str = message.text.strip()
     # Проверяем, что введенный ID не пустой
-    if not target_chat_id:
+    if not target_chat_id_str:
         await message.answer("❌ Вы не ввели ID канала.")
         await state.clear()
         return
@@ -286,10 +293,10 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     # Пытаемся деактивировать канал в БД
     try:
         # Вызываем функцию деактивации из модуля database.channels
-        success = deactivate_target_by_id(target_chat_id)
+        success = deactivate_target_by_id(target_chat_id_str)
         
         if success:
-            await message.answer(f"✅ Целевой канал с ID {target_chat_id} успешно деактивирован.")
+            await message.answer(f"✅ Целевой канал с ID {target_chat_id_str} успешно деактивирован.")
         else:
             await message.answer(f"❌ Канал с указанным ID не найден или уже деактивирован.")
     except Exception as e:
@@ -299,4 +306,60 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     await state.clear()
     
 
+#######################################################################
+#                                                                     #
+#                    Delete Target Channel                            #
+#                                                                     #
+#######################################################################
+@router.message(Command("delete_targer"))
+async def cmd_delete_target(message:Message, state:FSMContext):
+    """
+    Обработчик команды /delete_target для удаления целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM для хранения данных
+    
+    Действия:
+    1. Отправляет пользователю запрос на ввод ID канала для удаления
+    2. Устанавливает состояние DeleteTargetState.waiting_for_target_id
+       для ожидания ввода идентификатора канала
+    """
+    await message.answer("Введите ID канала для удаления:")
+    await state.set_state(DeleteTargetState.waiting_for_target_id)
 
+
+@router.message(DeleteTargetState.waiting_for_target_id)
+async def process_delete_target(message:Message, state:FSMContext):
+    """
+    Обработчик для получения ID канала и его удаления.
+
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Объект состояния FSM для хранения данных между этапами
+
+    Действия:
+    1. Получает ID канала из сообщения
+    2. Проверяет корректность введенного ID
+    3. Удаляет целевой канал из БД
+    4. Отправляет пользователю сообщение о результате операции
+    5. Очищает состояние FSM
+    """
+    target_chat_id_str = message.text.strip()
+
+    if not target_chat_id_str:
+        await message.answer("❌ Вы не ввели ID канала.")
+        await state.clear()
+        return
+
+    try:
+        success = delete_target_channel(target_chat_id_str)
+
+        if success:
+            await message.answer(f"✅ Целевой канал с ID {target_chat_id_str} успешно удален.")
+        else:
+            await message.answer(f"❌ Канал с указанным ID не найден или уже удален.")
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при удалении канала: {str(e)}")
+    
+    await state.clear()
