@@ -132,6 +132,49 @@ async def cmd_process_channel_id(message: Message, state: FSMContext):
         await state.clear()
 
 
+async def check_posting_bot_can_send(target_id_str: str) -> bool:
+    """
+    Проверяет, может ли постинг-бот отправлять сообщения в указанный канал.
+    
+    Args:
+        target_id_str (str): ID канала или username для проверки
+        
+    Returns:
+        bool: True если бот может отправлять сообщения, False в противном случае
+        
+    Действия:
+    1. Создает временный инстанс бота с токеном из .env
+    2. Пытается получить информацию о чате через get_chat
+    3. Возвращает результат проверки
+    """
+    from aiogram import Bot
+    from os import getenv
+    from dotenv import load_dotenv
+    
+    try:
+        # Загружаем токен постинг-бота из .env
+        load_dotenv()
+        posting_bot_token = getenv("TELEGRAM_BOT_TOKEN")
+        
+        if not posting_bot_token:
+            logger.error("Не найден токен постинг-бота в .env")
+            return False
+        
+        # Создаем временный инстанс бота
+        temp_bot = Bot(token=posting_bot_token)
+        
+        # Пытаемся получить информацию о чате
+        chat = await temp_bot.get_chat(target_id_str)
+        
+        # Если дошли до этой точки, значит бот имеет доступ к чату
+        await temp_bot.session.close()
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при проверке доступа бота к каналу {target_id_str}: {e}")
+        return False
+
+
 @router.message(SetChannelState.waiting_for_title)
 async def cmd_process_channel_title(message: Message, state: FSMContext):
     """
@@ -145,8 +188,9 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
     1. Получает название канала из сообщения
     2. Проверяет корректность названия
     3. Получает сохраненный ID канала из состояния FSM
-    4. Сохраняет канал в базу данных
-    5. Очищает состояние FSM
+    4. Проверяет, может ли постинг-бот отправлять сообщения в канал
+    5. Сохраняет канал в базу данных
+    6. Очищает состояние FSM
     
     Raises:
         Exception: При ошибках сохранения в БД или других проблемах
@@ -176,6 +220,21 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
             await state.clear()
             return
         
+        # Проверяем, может ли постинг-бот отправлять сообщения в канал
+        await message.answer("Проверяем доступ бота к каналу...")
+        can_send = await check_posting_bot_can_send(target_id)
+        
+        if not can_send:
+            await message.answer(
+                "❌ Бот не может отправлять сообщения в указанный канал.\n\n"
+                "Пожалуйста, убедитесь, что:\n"
+                "1. Вы добавили бота в канал\n"
+                "2. Бот имеет права администратора для отправки сообщений\n"
+                "3. ID или username канала указан правильно"
+            )
+            await state.clear()
+            return
+        
         # Сохраняем в БД
         # Выполняем синхронную функцию _db_call_sync в отдельном потоке через asyncio.to_thread,
         # чтобы не блокировать основной поток бота во время работы с БД
@@ -191,7 +250,6 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
 
     finally:
         await state.clear()
-        logger.info("Состояние очищено")
 
 #######################################################################
 #                                                                     #
