@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 
 # Тексты для сообщений
-from telegram.texts.text_for_messages import text_for_set_new_target
+from telegram.bot.texts.text_for_messages import text_for_set_new_target
 
 # Библиотеки для работы с базой данных
 from database.channels import (
