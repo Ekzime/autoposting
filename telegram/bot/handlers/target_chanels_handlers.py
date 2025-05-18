@@ -300,6 +300,10 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     5. Очищает состояние FSM
     """
     target_chat_id_str = message.text.strip()
+
+    def _deactivate_sync():
+        return deactivate_target_by_id(target_chat_id_str)
+
     # Проверяем, что введенный ID не пустой
     if not target_chat_id_str:
         await message.answer("❌ Вы не ввели ID канала.")
@@ -309,7 +313,7 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     # Пытаемся деактивировать канал в БД
     try:
         # Вызываем функцию деактивации из модуля database.channels
-        success = deactivate_target_by_id(target_chat_id_str)
+        success = await asyncio.to_thread(_deactivate_sync)
         
         if success:
             await message.answer(f"✅ Целевой канал с ID {target_chat_id_str} успешно деактивирован.")
@@ -385,7 +389,6 @@ async def process_delete_target(message:Message, state:FSMContext):
 
 
 # TODO:
-# - Провести рефактор, все методы круда вызывать в отедьном потоке через asyncio.to_thread.
 # - Дописать хендлер для активации целевого канала.
 # - Добавить проверку на наличие канала в базе данных перед установкой нового целевого канала.
 # - Добавить проверку на наличие канала в базе данных перед деактивацией целевого канала.
