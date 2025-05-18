@@ -2,7 +2,7 @@ from telethon.tl.types import Channel
 from database.manager import session_scope
 from database.models import Channels, engine, PostingTarget
 from sqlalchemy.orm import Session
-from sqlalchemy import select, Select, update
+from sqlalchemy import select, Select, update, delete
 
 
 
@@ -226,3 +226,37 @@ def get_all_target_channels() -> list[dict]:
             }
             for t in targets
         ]
+
+def delete_target_channel(target_chat_id: str) -> bool:
+    """
+    Удаляет целевой канал из PostingTarget по его Telegram ID.
+    
+    Args:
+        target_chat_id (str): ID канала в Telegram
+        
+    Returns:
+        bool: True если удаление прошло успешно, False в случае ошибки
+        
+    Действия:
+    1. Находит запись канала в БД по target_chat_id
+    2. Удаляет найденную запись
+    3. Сохраняет изменения
+    """
+    with session_scope() as db:
+        try:
+            # Находим и удаляем запись
+            result = db.execute(
+                delete(PostingTarget)
+                .where(PostingTarget.target_chat_id == target_chat_id)
+            )
+            
+            # Проверяем, была ли удалена хотя бы одна запись
+            if result.rowcount > 0:
+                db.commit()
+                return True
+            else:
+                # Если записей с таким ID не найдено
+                return False
+        except Exception as e:
+            print(f"Error in delete_target_channel: {e}")
+            return False
