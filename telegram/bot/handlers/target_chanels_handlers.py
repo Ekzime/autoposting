@@ -213,10 +213,10 @@ async def cmd_all_channels(message: Message):
 #              Handle Target Channel Activation Status                #
 #                                                                     #
 #######################################################################
-@router.message(Command("get_active_target"))
-async def cmd_get_active_target(message: Message):
+@router.message(Command("view_targets"))
+async def cmd_view_targets(message: Message):
     """
-    Обработчик команды /get_active_target для получения информации об активном целевом канале.
+    Обработчик команды /get_active_target для получения информации о целевых каналов.
     
     Args:
         message (Message): Объект сообщения от пользователя
@@ -237,6 +237,11 @@ async def cmd_get_active_target(message: Message):
     else:
         await message.answer("❌ Активный целевой канал не установлен.")
 
+#######################################################################
+#                                                                     #
+#              Handle Target Channel Deactivation                     #
+#                                                                     #
+#######################################################################
 @router.message(Command("deactivate_target"))
 async def cmd_deactivate_target(message: Message, state: FSMContext):
     """
@@ -253,4 +258,45 @@ async def cmd_deactivate_target(message: Message, state: FSMContext):
     """
     await message.answer("Введите ID или @username канала для деактивации:")
     await state.set_state(DeactivateTargetState.waiting_for_target_id)
+
+
+@router.message(DeactivateTargetState.waiting_for_target_id)
+async def process_deactivate_target(message: Message, state: FSMContext):
+    """
+    Обработчик для получения ID или @username канала для деактивации.
+
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Объект состояния FSM для хранения данных между этапами
+
+    Действия:
+    1. Получает ID канала из сообщения
+    2. Проверяет корректность введенного ID
+    3. Деактивирует целевой канал в БД
+    4. Отправляет пользователю сообщение об успешной деактивации
+    5. Очищает состояние FSM
+    """
+    target_chat_id = message.text.strip()
+    # Проверяем, что введенный ID не пустой
+    if not target_chat_id:
+        await message.answer("❌ Вы не ввели ID канала.")
+        await state.clear()
+        return
+    
+    # Пытаемся деактивировать канал в БД
+    try:
+        # Вызываем функцию деактивации из модуля database.channels
+        success = deactivate_target_by_id(target_chat_id)
+        
+        if success:
+            await message.answer(f"✅ Целевой канал с ID {target_chat_id} успешно деактивирован.")
+        else:
+            await message.answer(f"❌ Канал с указанным ID не найден или уже деактивирован.")
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при деактивации канала: {str(e)}")
+    
+    # Очищаем состояние FSM
+    await state.clear()
+    
+
 
