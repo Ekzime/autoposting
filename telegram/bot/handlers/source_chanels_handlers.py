@@ -36,6 +36,8 @@ class UpdateSourceStates(StatesGroup):
     waiting_for_source_id = State()
     waiting_for_new_identifier = State()
     waiting_for_new_title = State()
+    asking_change_target = State()
+    waiting_for_new_target = State()
     
 #######################################################################
 #                                                                     #
@@ -288,8 +290,12 @@ async def cmd_update_source(message: Message, state: FSMContext):
         # Получаем все источники из базы данных
         def _get_all_sources_sync():
             return ps_repo.get_all_sources()
+            
+        def _get_all_targets_sync():
+            return pt_repo.get_all_target_channels()
         
         sources = await asyncio.to_thread(_get_all_sources_sync)
+        targets = await asyncio.to_thread(_get_all_targets_sync)
         
         if not sources:
             await message.answer(
@@ -299,18 +305,27 @@ async def cmd_update_source(message: Message, state: FSMContext):
             )
             return
         
+        # Создаем словарь для быстрого поиска названий каналов по их ID
+        target_names = {}
+        for target in targets:
+            target_names[target['id']] = target['target_title'] or target['target_chat_id']
+        
         # Формируем список источников для отображения
-        sources_list = "\n".join([
-            f"📌 <code>{source['id']}</code>: {source['source_title'] or source['source_identifier']} "
-            f"(для канала ID: <code>{source['posting_target_id']}</code>)"
-            for source in sources
-        ])
+        sources_list = []
+        for source in sources:
+            target_id = source['posting_target_id']
+            target_name = target_names.get(target_id, f"ID: {target_id}")
+            
+            sources_list.append(
+                f"📌 <code>{source['id']}</code>: {source['source_title'] or source['source_identifier']} "
+                f"(для канала: <b>{target_name}</b>)"
+            )
         
         # Отправляем сообщение с инструкцией и списком источников
         await message.answer(
             "🔄 <b>Обновление источника парсинга</b>\n\n"
             "Выберите ID источника, который нужно обновить:\n\n"
-            f"{sources_list}\n\n"
+            f"{chr(10).join(sources_list)}\n\n"
             "ℹ️ Отправьте ID источника числом.",
             parse_mode="HTML"
         )
@@ -407,9 +422,9 @@ async def process_new_identifier(message: Message, state: FSMContext):
         await state.clear()
 
 @router.message(UpdateSourceStates.waiting_for_new_title)
-async def process_new_title_and_update(message: Message, state: FSMContext):
+async def process_new_title_and_ask_target(message: Message, state: FSMContext):
     """
-    Обработчик ввода нового названия источника и выполнения обновления.
+    Обработчик ввода нового названия источника и запроса о смене целевого канала.
     
     Args:
         message (Message): Сообщение с новым названием
@@ -427,8 +442,143 @@ async def process_new_title_and_update(message: Message, state: FSMContext):
         else:
             new_title = message.text.strip()
         
-        # Если оба параметра пропущены, сообщаем об этом
-        if new_identifier is None and new_title is None:
+        # Сохраняем новое название в состоянии
+        await state.update_data(new_title=new_title)
+        
+        # Спрашиваем, хочет ли пользователь изменить целевой канал
+        await message.answer(
+            "🔄 <b>Изменение целевого канала</b>\n\n"
+            "Хотите изменить целевой канал для этого источника?\n\n"
+            "Отправьте <code>yes</code>, чтобы изменить канал\n"
+            "Отправьте <code>no</code>, чтобы оставить текущий канал",
+            parse_mode="HTML"
+        )
+        
+        # Переходим к следующему состоянию
+        await state.set_state(UpdateSourceStates.asking_change_target)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке нового названия: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при обработке названия</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+@router.message(UpdateSourceStates.asking_change_target)
+async def process_change_target_answer(message: Message, state: FSMContext):
+    """
+    Обработчик ответа на вопрос о смене целевого канала.
+    
+    Args:
+        message (Message): Сообщение с ответом (yes/no)
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        answer = message.text.lower().strip()
+        
+        if answer == "yes":
+            # Получаем список всех целевых каналов
+            def _get_all_targets_sync():
+                return pt_repo.get_all_target_channels()
+                
+            targets = await asyncio.to_thread(_get_all_targets_sync)
+            
+            if not targets:
+                await message.answer(
+                    "❌ <b>Нет доступных целевых каналов</b>\n\n"
+                    "Невозможно изменить целевой канал. Продолжаем без изменения канала.",
+                    parse_mode="HTML"
+                )
+                # Переходим к обновлению без изменения канала
+                await process_update_source(message, state)
+                return
+            
+            # Формируем список целевых каналов для выбора
+            targets_list = "\n".join([
+                f"📌 <code>{target['id']}</code>: {target['target_title'] or target['target_chat_id']}"
+                for target in targets
+            ])
+            
+            await message.answer(
+                "🎯 <b>Выбор нового целевого канала</b>\n\n"
+                "Выберите ID нового целевого канала:\n\n"
+                f"{targets_list}\n\n"
+                "ℹ️ Отправьте ID канала числом.",
+                parse_mode="HTML"
+            )
+            
+            # Переходим к состоянию ожидания выбора нового целевого канала
+            await state.set_state(UpdateSourceStates.waiting_for_new_target)
+        elif answer == "no":
+            # Пользователь не хочет менять целевой канал, продолжаем обновление
+            await process_update_source(message, state)
+        else:
+            # Неверный ввод
+            await message.answer(
+                "⚠️ <b>Неверный ввод</b>\n\n"
+                "Пожалуйста, отправьте <code>yes</code> или <code>no</code>.",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        logger.error(f"Ошибка при обработке ответа о смене канала: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при обработке ответа</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+@router.message(UpdateSourceStates.waiting_for_new_target)
+async def process_new_target_selection(message: Message, state: FSMContext):
+    """
+    Обработчик выбора нового целевого канала.
+    
+    Args:
+        message (Message): Сообщение с ID нового целевого канала
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        # Проверяем, что введено число
+        if not message.text.isdigit():
+            await message.answer(
+                "⚠️ <b>Ошибка ввода</b>\n\n"
+                "ID канала должен быть числом. Пожалуйста, введите корректный ID.",
+                parse_mode="HTML"
+            )
+            return
+        
+        new_target_id = int(message.text)
+        
+        # Сохраняем ID нового целевого канала в состоянии
+        await state.update_data(new_target_id=new_target_id)
+        
+        # Переходим к обновлению источника
+        await process_update_source(message, state)
+    except Exception as e:
+        logger.error(f"Ошибка при выборе нового целевого канала: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при выборе нового целевого канала</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+async def process_update_source(message: Message, state: FSMContext):
+    """
+    Функция для выполнения обновления источника.
+    
+    Args:
+        message (Message): Сообщение пользователя
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        # Получаем все данные из состояния
+        data = await state.get_data()
+        source_id = data.get("source_id")
+        new_identifier = data.get("new_identifier")
+        new_title = data.get("new_title")
+        new_target_id = data.get("new_target_id")  # Может быть None, если канал не меняется
+        
+        # Если все параметры пропущены, сообщаем об этом
+        if new_identifier is None and new_title is None and new_target_id is None:
             await message.answer(
                 "ℹ️ <b>Обновление отменено</b>\n\n"
                 "Вы не указали новых данных для обновления.",
@@ -439,23 +589,53 @@ async def process_new_title_and_update(message: Message, state: FSMContext):
         
         # Функция для синхронного обновления источника
         def _update_source_sync():
-            return ps_repo.update_source(
-                source_db_id=source_id,
-                new_source_identifier=new_identifier,
-                new_source_title=new_title
-            )
+            # Если нужно изменить целевой канал
+            if new_target_id is not None:
+                # Сначала меняем целевой канал
+                target_change_result = ps_repo.change_target_for_source(
+                    source_db_id=source_id,
+                    new_target_db_id=new_target_id
+                )
+                
+                if not target_change_result:
+                    return False, None, None
+            
+            # Если нужно обновить идентификатор или название
+            if new_identifier is not None or new_title is not None:
+                update_result = ps_repo.update_source(
+                    source_db_id=source_id,
+                    new_source_identifier=new_identifier,
+                    new_source_title=new_title
+                )
+                
+                if not update_result:
+                    return False, None, None
+            
+            # Получаем информацию о новом целевом канале, если он был изменен
+            target_name = None
+            if new_target_id is not None:
+                targets = pt_repo.get_all_target_channels()
+                for target in targets:
+                    if target['id'] == new_target_id:
+                        target_name = target['target_title'] or target['target_chat_id']
+                        break
+            
+            return True, new_target_id, target_name
         
         # Выполняем обновление источника
         result = await asyncio.to_thread(_update_source_sync)
+        success, updated_target_id, target_name = result
         
         # Обрабатываем результат обновления
-        if result:
+        if success:
             # Формируем сообщение об успешном обновлении
             update_details = []
             if new_identifier:
                 update_details.append(f"🔍 Новый идентификатор: <code>{new_identifier}</code>")
             if new_title:
                 update_details.append(f"📝 Новое название: <code>{new_title}</code>")
+            if updated_target_id:
+                update_details.append(f"🎯 Новый целевой канал: <code>{target_name}</code> (ID: {updated_target_id})")
             
             update_info = "\n".join(update_details)
             
@@ -468,7 +648,7 @@ async def process_new_title_and_update(message: Message, state: FSMContext):
         else:
             await message.answer(
                 "❌ <b>Не удалось обновить источник</b>\n\n"
-                "Возможно, источник не существует или новый идентификатор уже используется для этого целевого канала.",
+                "Возможно, источник или целевой канал не существуют, или новый идентификатор уже используется для выбранного целевого канала.",
                 parse_mode="HTML"
             )
         
