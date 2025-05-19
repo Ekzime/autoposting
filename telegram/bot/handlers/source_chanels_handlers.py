@@ -38,6 +38,11 @@ class UpdateSourceStates(StatesGroup):
     waiting_for_new_title = State()
     asking_change_target = State()
     waiting_for_new_target = State()
+
+class DeleteSourceStates(StatesGroup):
+    waiting_for_source_id = State()
+    confirming_deletion = State()
+
     
 #######################################################################
 #                                                                     #
@@ -661,4 +666,220 @@ async def process_update_source(message: Message, state: FSMContext):
             parse_mode="HTML"
         )
         await state.clear()
+
+
+#######################################################################
+#                                                                     #
+#                    Handlers Delete Source                           #
+#                                                                     #
+#######################################################################
+@router.message(Command("delete_source"))
+async def cmd_delete_source(message: Message, state: FSMContext):
+    """
+    Обработчик команды /delete_source для удаления источника парсинга.
     
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Объект состояния FSM для хранения данных между этапами
+    """
+    try:
+        # Получаем все источники из базы данных
+        def _get_all_sources_sync():
+            return ps_repo.get_all_sources()
+            
+        def _get_all_targets_sync():
+            return pt_repo.get_all_target_channels()
+        
+        sources = await asyncio.to_thread(_get_all_sources_sync)
+        targets = await asyncio.to_thread(_get_all_targets_sync)
+        
+        if not sources:
+            await message.answer(
+                "❌ <b>Нет доступных источников для удаления</b>\n\n"
+                "Сначала добавьте источник с помощью команды /add_source",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Создаем словарь для быстрого поиска названий каналов по их ID
+        target_names = {}
+        for target in targets:
+            target_names[target['id']] = target['target_title'] or target['target_chat_id']
+        
+        # Формируем список источников для отображения
+        sources_list = []
+        for source in sources:
+            target_id = source['posting_target_id']
+            target_name = target_names.get(target_id, f"ID: {target_id}")
+            
+            sources_list.append(
+                f"📌 <code>{source['id']}</code>: {source['source_title'] or source['source_identifier']} "
+                f"(для канала: <b>{target_name}</b>)"
+            )
+        
+        # Отправляем сообщение с инструкцией и списком источников
+        await message.answer(
+            "🗑️ <b>Удаление источника парсинга</b>\n\n"
+            "Выберите ID источника, который нужно удалить:\n\n"
+            f"{chr(10).join(sources_list)}\n\n"
+            "⚠️ <b>Внимание!</b> Удаление источника необратимо!\n"
+            "ℹ️ Отправьте ID источника числом.",
+            parse_mode="HTML"
+        )
+        
+        # Устанавливаем состояние ожидания выбора источника
+        await state.set_state(DeleteSourceStates.waiting_for_source_id)
+    except Exception as e:
+        logger.error(f"Ошибка при запросе списка источников для удаления: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при получении списка источников</b>",
+            parse_mode="HTML"
+        )
+
+@router.message(DeleteSourceStates.waiting_for_source_id)
+async def process_delete_source_id(message: Message, state: FSMContext):
+    """
+    Обработчик выбора ID источника для удаления.
+    
+    Args:
+        message (Message): Сообщение с ID источника
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        # Проверяем, что введено число
+        if not message.text.isdigit():
+            await message.answer(
+                "⚠️ <b>Ошибка ввода</b>\n\n"
+                "ID источника должен быть числом. Пожалуйста, введите корректный ID.",
+                parse_mode="HTML"
+            )
+            return
+        
+        source_id = int(message.text)
+        
+        # Сохраняем ID источника в состоянии
+        await state.update_data(source_id=source_id)
+        
+        # Получаем информацию об источнике для подтверждения
+        def _get_source_info_sync():
+            sources = ps_repo.get_all_sources()
+            targets = pt_repo.get_all_target_channels()
+            
+            source_info = None
+            target_name = None
+            
+            # Находим источник по ID
+            for source in sources:
+                if source['id'] == source_id:
+                    source_info = source
+                    break
+            
+            if source_info:
+                # Находим название целевого канала
+                for target in targets:
+                    if target['id'] == source_info['posting_target_id']:
+                        target_name = target['target_title'] or target['target_chat_id']
+                        break
+            
+            return source_info, target_name
+        
+        result = await asyncio.to_thread(_get_source_info_sync)
+        source_info, target_name = result
+        
+        if not source_info:
+            await message.answer(
+                f"❌ <b>Источник с ID {source_id} не найден</b>\n\n"
+                "Пожалуйста, проверьте ID и попробуйте снова.",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+        
+        # Запрашиваем подтверждение удаления
+        source_title = source_info['source_title'] or source_info['source_identifier']
+        target_info = f"для канала <b>{target_name}</b>" if target_name else f"для канала с ID {source_info['posting_target_id']}"
+        
+        await message.answer(
+            f"⚠️ <b>Подтверждение удаления</b>\n\n"
+            f"Вы собираетесь удалить источник:\n"
+            f"📌 ID: <code>{source_id}</code>\n"
+            f"🔍 Идентификатор: <code>{source_info['source_identifier']}</code>\n"
+            f"📝 Название: <code>{source_title}</code>\n"
+            f"🎯 Канал: {target_info}\n\n"
+            f"Это действие необратимо! Подтвердите удаление:\n\n"
+            f"Отправьте <code>confirm</code> для удаления\n"
+            f"Отправьте <code>cancel</code> для отмены",
+            parse_mode="HTML"
+        )
+        
+        # Переходим к состоянию подтверждения удаления
+        await state.set_state(DeleteSourceStates.confirming_deletion)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке выбора ID источника для удаления: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при обработке выбора</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+@router.message(DeleteSourceStates.confirming_deletion)
+async def process_delete_confirmation(message: Message, state: FSMContext):
+    """
+    Обработчик подтверждения удаления источника.
+    
+    Args:
+        message (Message): Сообщение с подтверждением
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        answer = message.text.lower().strip()
+        
+        if answer == "confirm":
+            # Получаем ID источника из состояния
+            data = await state.get_data()
+            source_id = data.get("source_id")
+            
+            # Удаляем источник
+            def _delete_source_sync():
+                return ps_repo.delete_source_by_id(source_id)
+            
+            success = await asyncio.to_thread(_delete_source_sync)
+            
+            if success:
+                await message.answer(
+                    "✅ <b>Источник успешно удален!</b>\n\n"
+                    f"Источник с ID <code>{source_id}</code> был удален из базы данных.",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "❌ <b>Не удалось удалить источник</b>\n\n"
+                    "Возможно, источник уже был удален или произошла ошибка в базе данных.",
+                    parse_mode="HTML"
+                )
+        elif answer == "cancel":
+            await message.answer(
+                "✅ <b>Удаление отменено</b>\n\n"
+                "Источник не был удален.",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "⚠️ <b>Неверный ввод</b>\n\n"
+                "Пожалуйста, отправьте <code>confirm</code> для подтверждения удаления\n"
+                "или <code>cancel</code> для отмены.",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Очищаем состояние FSM
+        await state.clear()
+    except Exception as e:
+        logger.error(f"Ошибка при подтверждении удаления источника: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при удалении источника</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+
