@@ -243,3 +243,48 @@ class ParsingSourceRepository:
             logging.error(f"Ошибка при получении всех источников парсинга: {e}")
             return []
 
+    def update_source(self, source_db_id: int, new_source_identifier: str = None, new_source_title: str = None) -> bool:
+        """
+        Обновляет информацию об источнике парсинга.
+        
+        Args:
+            source_db_id (int): ID источника парсинга для обновления
+            new_source_identifier (str, optional): Новый идентификатор источника
+            new_source_title (str, optional): Новое название источника
+            
+        Returns:
+            bool: True в случае успешного обновления, False если источник не найден или произошла ошибка
+        """
+        try:
+            with session_scope() as db:
+                # Получаем источник по ID
+                source = db.get(ParsingSourceChannel, source_db_id)
+                if not source:
+                    logging.error(f"Источник с id {source_db_id} не найден")
+                    return False
+                
+                # Если передан новый идентификатор, проверяем на дубликаты
+                if new_source_identifier and new_source_identifier != source.source_identifier:
+                    # Проверяем, не создаст ли это дубликат для текущего целевого канала
+                    existing_source = db.execute(
+                        select(ParsingSourceChannel).filter_by(
+                            posting_target_id=source.posting_target_id,
+                            source_identifier=new_source_identifier
+                        )
+                    ).scalar_one_or_none()
+                    
+                    if existing_source and existing_source.id != source_db_id:
+                        logging.warning(f"Источник с идентификатором {new_source_identifier} уже существует для целевого канала {source.posting_target_id}")
+                        return False
+                    
+                    source.source_identifier = new_source_identifier
+                
+                # Обновляем название источника, если оно передано
+                if new_source_title is not None:
+                    source.source_title = new_source_title
+                
+                db.flush()
+                return True
+        except Exception as e:
+            logging.error(f"Ошибка при обновлении источника с id {source_db_id}: {e}", exc_info=True)
+            return False

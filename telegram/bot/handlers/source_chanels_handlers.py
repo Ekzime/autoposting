@@ -32,15 +32,19 @@ class AddSourceStates(StatesGroup):
     waiting_for_source_identifier = State()
     waiting_for_source_title = State()
 
+class UpdateSourceStates(StatesGroup):
+    waiting_for_source_id = State()
+    waiting_for_new_identifier = State()
+    waiting_for_new_title = State()
     
 #######################################################################
 #                                                                     #
-#                    Handlers                                         #
+#                    Handlers Add Source                              #
 #                                                                     #
 #######################################################################
 
 @router.message(Command("add_source"))
-async def add_source_command(message: Message, state: FSMContext):
+async def cmd_add_source_command(message: Message, state: FSMContext):
     """
     Обработчик команды /add_source для добавления нового источника парсинга.
     
@@ -173,7 +177,7 @@ async def process_source_identifier(message: Message, state: FSMContext):
         await message.answer(
             "📋 <b>Название источника</b>\n\n"
             "Введите название источника для отображения\n"
-            "(или отправьте '<code>пропустить</code>')",
+            "(или отправьте '<code>skip</code>')",
             parse_mode="HTML"
         )
         
@@ -198,7 +202,7 @@ async def process_source_title(message: Message, state: FSMContext):
     
     Действия:
         1. Получает сохраненные данные (ID целевого канала и идентификатор источника)
-        2. Обрабатывает название источника (None если пользователь отправил 'пропустить')
+        2. Обрабатывает название источника (None если пользователь отправил 'skip')
         3. Добавляет источник в базу данных через репозиторий
         4. Отправляет пользователю результат операции:
            - Уведомление если источник уже существует
@@ -217,7 +221,7 @@ async def process_source_title(message: Message, state: FSMContext):
         
         # Определяем название источника (None если пропущено)
         source_title = None
-        if message.text.lower() != 'пропустить':
+        if message.text.lower() != 'skip':
             source_title = message.text.strip()
         
         # Вспомогательная функция для синхронного добавления источника
@@ -266,3 +270,215 @@ async def process_source_title(message: Message, state: FSMContext):
         await message.answer("❌ <b>Произошла ошибка при добавлении источника.</b>", parse_mode="HTML")
         await state.clear()
 
+#######################################################################
+#                                                                     #
+#                    Handlers Update Source                           #
+#                                                                     #
+#######################################################################
+@router.message(Command("update_source"))
+async def cmd_update_source(message: Message, state: FSMContext):
+    """
+    Обработчик команды /update_source для обновления существующего источника парсинга.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя, содержащий команду
+        state (FSMContext): Объект состояния FSM для хранения данных между этапами
+    """
+    try:
+        # Получаем все источники из базы данных
+        def _get_all_sources_sync():
+            return ps_repo.get_all_sources()
+        
+        sources = await asyncio.to_thread(_get_all_sources_sync)
+        
+        if not sources:
+            await message.answer(
+                "❌ <b>Нет доступных источников для обновления</b>\n\n"
+                "Сначала добавьте источник с помощью команды /add_source",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Формируем список источников для отображения
+        sources_list = "\n".join([
+            f"📌 <code>{source['id']}</code>: {source['source_title'] or source['source_identifier']} "
+            f"(для канала ID: <code>{source['posting_target_id']}</code>)"
+            for source in sources
+        ])
+        
+        # Отправляем сообщение с инструкцией и списком источников
+        await message.answer(
+            "🔄 <b>Обновление источника парсинга</b>\n\n"
+            "Выберите ID источника, который нужно обновить:\n\n"
+            f"{sources_list}\n\n"
+            "ℹ️ Отправьте ID источника числом.",
+            parse_mode="HTML"
+        )
+        
+        # Устанавливаем состояние ожидания выбора источника
+        await state.set_state(UpdateSourceStates.waiting_for_source_id)
+    except Exception as e:
+        logger.error(f"Ошибка при запросе списка источников: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при получении списка источников</b>",
+            parse_mode="HTML"
+        )
+
+@router.message(UpdateSourceStates.waiting_for_source_id)
+async def process_source_id_selection(message: Message, state: FSMContext):
+    """
+    Обработчик выбора ID источника для обновления.
+    
+    Args:
+        message (Message): Сообщение с ID источника
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        # Проверяем, что введено число
+        if not message.text.isdigit():
+            await message.answer(
+                "⚠️ <b>Ошибка ввода</b>\n\n"
+                "ID источника должен быть числом. Пожалуйста, введите корректный ID.",
+                parse_mode="HTML"
+            )
+            return
+        
+        source_id = int(message.text)
+        
+        # Сохраняем ID источника в состоянии
+        await state.update_data(source_id=source_id)
+        
+        # Запрашиваем новый идентификатор источника
+        await message.answer(
+            "🔤 <b>Введите новый идентификатор источника</b>\n\n"
+            "Например, имя пользователя канала без символа @\n"
+            "Или отправьте <code>skip</code>, чтобы оставить текущий идентификатор.",
+            parse_mode="HTML"
+        )
+        
+        # Переходим к следующему состоянию
+        await state.set_state(UpdateSourceStates.waiting_for_new_identifier)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке выбора ID источника: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при обработке выбора</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+@router.message(UpdateSourceStates.waiting_for_new_identifier)
+async def process_new_identifier(message: Message, state: FSMContext):
+    """
+    Обработчик ввода нового идентификатора источника.
+    
+    Args:
+        message (Message): Сообщение с новым идентификатором
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        # Получаем данные из состояния
+        data = await state.get_data()
+        source_id = data.get("source_id")
+        
+        # Проверяем, хочет ли пользователь пропустить этот шаг
+        if message.text.lower() == "skip":
+            new_identifier = None
+        else:
+            new_identifier = message.text.strip()
+        
+        # Сохраняем новый идентификатор в состоянии
+        await state.update_data(new_identifier=new_identifier)
+        
+        # Запрашиваем новое название источника
+        await message.answer(
+            "📝 <b>Введите новое название источника</b>\n\n"
+            "Или отправьте <code>skip</code>, чтобы оставить текущее название.",
+            parse_mode="HTML"
+        )
+        
+        # Переходим к следующему состоянию
+        await state.set_state(UpdateSourceStates.waiting_for_new_title)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке нового идентификатора: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при обработке идентификатора</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+@router.message(UpdateSourceStates.waiting_for_new_title)
+async def process_new_title_and_update(message: Message, state: FSMContext):
+    """
+    Обработчик ввода нового названия источника и выполнения обновления.
+    
+    Args:
+        message (Message): Сообщение с новым названием
+        state (FSMContext): Состояние FSM
+    """
+    try:
+        # Получаем данные из состояния
+        data = await state.get_data()
+        source_id = data.get("source_id")
+        new_identifier = data.get("new_identifier")
+        
+        # Проверяем, хочет ли пользователь пропустить этот шаг
+        if message.text.lower() == "skip":
+            new_title = None
+        else:
+            new_title = message.text.strip()
+        
+        # Если оба параметра пропущены, сообщаем об этом
+        if new_identifier is None and new_title is None:
+            await message.answer(
+                "ℹ️ <b>Обновление отменено</b>\n\n"
+                "Вы не указали новых данных для обновления.",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+        
+        # Функция для синхронного обновления источника
+        def _update_source_sync():
+            return ps_repo.update_source(
+                source_db_id=source_id,
+                new_source_identifier=new_identifier,
+                new_source_title=new_title
+            )
+        
+        # Выполняем обновление источника
+        result = await asyncio.to_thread(_update_source_sync)
+        
+        # Обрабатываем результат обновления
+        if result:
+            # Формируем сообщение об успешном обновлении
+            update_details = []
+            if new_identifier:
+                update_details.append(f"🔍 Новый идентификатор: <code>{new_identifier}</code>")
+            if new_title:
+                update_details.append(f"📝 Новое название: <code>{new_title}</code>")
+            
+            update_info = "\n".join(update_details)
+            
+            await message.answer(
+                f"✅ <b>Источник успешно обновлен!</b>\n\n"
+                f"📌 ID источника: <code>{source_id}</code>\n"
+                f"{update_info}",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "❌ <b>Не удалось обновить источник</b>\n\n"
+                "Возможно, источник не существует или новый идентификатор уже используется для этого целевого канала.",
+                parse_mode="HTML"
+            )
+        
+        # Очищаем состояние FSM
+        await state.clear()
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении источника: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при обновлении источника</b>",
+            parse_mode="HTML"
+        )
+        await state.clear()
+    

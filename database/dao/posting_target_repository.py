@@ -238,3 +238,5 @@ class PostingTargetRepository:
             except Exception as e:
                 logging.error(f"Error in activate_target_by_id: {e}")
                 return False
+
+
