@@ -58,6 +58,24 @@ class NewsStatus(enum.Enum):
     ERROR_POSTING = "error_posting"
 
 
+class ParsingSourceChannel(BaseModel):
+    __tablename__ = "parsing_source_channels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_identifier: Mapped[str] = mapped_column(String(255), nullable=False) 
+    source_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Внешний ключ, ссылающийся на id в таблице posting_targets
+    posting_target_id: Mapped[int] = mapped_column(ForeignKey("posting_targets.id"), nullable=False)
+    posting_target: Mapped["PostingTarget"] = relationship(back_populates="parsing_sources")
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("source_identifier", "posting_target_id", name="uq_source_for_target"),
+    )
+
+    def __repr__(self):
+        return f"<ParsingSourceChannel(id={self.id}, source='{self.source_identifier}', target_id={self.posting_target_id})>"
+
 
 class Channels(BaseModel):
     __tablename__ = "channels"
@@ -107,6 +125,10 @@ class PostingTarget(BaseModel):
     target_title: Mapped[str | None] = mapped_column(String(255), nullable=True) # Название канала 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True) # Активна ли эта настройка
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    parsing_sources: Mapped[list["ParsingSourceChannel"]] = relationship(
+        back_populates="posting_target",
+        cascade="all, delete-orphan" # Если удаляем PostingtTarget, удаляем и связанные с ним источники парсинга
+    )
     
     def __repr__(self):
         return f"<PostingTarget(id={self.id}, target_chat_id='{self.target_chat_id}', title='{self.target_title}')>"

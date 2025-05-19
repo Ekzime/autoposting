@@ -7,6 +7,20 @@ from database.models import PostingTarget
 from database.manager import session_scope
 
 class PostingTargetRepository:
+    """
+    Репозиторий для управления целевыми каналами для постинга.
+    
+    Этот класс предоставляет методы для работы с таблицей PostingTarget в базе данных:
+    - Добавление новых целевых каналов
+    - Активация/деактивация каналов
+    - Получение списка всех каналов
+    - Управление активным каналом для публикации
+    
+    Использует глобальный session_scope для управления сессиями БД.
+    """
+    def __init__(self):
+        logging.debug("Инициализация PostingTargetRepository")
+    
     def set_active_target(self, target_chat_id_str: str, target_title: str | None) -> PostingTarget | None:
         """
         Устанавливает активную цель для постинга.
@@ -194,13 +208,6 @@ class PostingTargetRepository:
         """
         with session_scope() as db:
             try:
-                # Сначала деактивируем все активные каналы
-                db.execute(
-                    update(PostingTarget)
-                    .where(PostingTarget.is_active == True)
-                    .values(is_active=False)
-                )
-                
                 # Затем ищем и активируем нужный канал
                 target = db.execute(
                     select(PostingTarget).where(PostingTarget.target_chat_id == target_chat_id_str)
@@ -208,6 +215,13 @@ class PostingTargetRepository:
                 
                 if not target:
                     return False
+
+                # Сначала деактивируем все активные каналы
+                db.execute(
+                    update(PostingTarget)
+                    .where(PostingTarget.is_active == True)
+                    .values(is_active=False)
+                )
                 
                 target.is_active = True
                 return True
