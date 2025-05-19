@@ -1,29 +1,28 @@
 import logging
 import asyncio
+from os import getenv
 
 # Библиотеки для работы с ботом
-from aiogram import Router, F
+from aiogram import Router, F, Bot
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
+from dotenv import load_dotenv
 
 # Тексты для сообщений
-from telegram.bot.texts.text_for_messages import text_for_set_new_target
+from telegram.bot.texts.text_for_messages import (
+    text_for_set_new_target,
+    bot_dont_can_send_message_to_channel_text
+)
 
 # Библиотеки для работы с базой данных
-from database.channels import (
-    set_active_target, 
-    get_active_target_chat_id_str,
-    deactivate_target_by_id,
-    get_active_target_info,
-    get_all_target_channels,
-    delete_target_channel,
-    activate_target_by_id
-)
+from database.repositories import posting_target_repository as pt_repo
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 router = Router()
 
@@ -136,49 +135,6 @@ async def cmd_process_channel_id(message: Message, state: FSMContext):
         await state.clear()
 
 
-async def check_posting_bot_can_send(target_id_str: str) -> bool:
-    """
-    Проверяет, может ли постинг-бот отправлять сообщения в указанный канал.
-    
-    Args:
-        target_id_str (str): ID канала или username для проверки
-        
-    Returns:
-        bool: True если бот может отправлять сообщения, False в противном случае
-        
-    Действия:
-    1. Создает временный инстанс бота с токеном из .env
-    2. Пытается получить информацию о чате через get_chat
-    3. Возвращает результат проверки
-    """
-    from aiogram import Bot
-    from os import getenv
-    from dotenv import load_dotenv
-    
-    try:
-        # Загружаем токен постинг-бота из .env
-        load_dotenv()
-        posting_bot_token = getenv("TELEGRAM_BOT_TOKEN")
-        
-        if not posting_bot_token:
-            logger.error("Не найден токен постинг-бота в .env")
-            return False
-        
-        # Создаем временный инстанс бота
-        temp_bot = Bot(token=posting_bot_token)
-        
-        # Пытаемся получить информацию о чате
-        chat = await temp_bot.get_chat(target_id_str)
-        
-        # Если дошли до этой точки, значит бот имеет доступ к чату
-        await temp_bot.session.close()
-        return True
-        
-    except Exception as e:
-        logger.error(f"Ошибка при проверке доступа бота к каналу {target_id_str}: {e}")
-        return False
-
-
 @router.message(SetChannelState.waiting_for_title)
 async def cmd_process_channel_title(message: Message, state: FSMContext):
     """
@@ -210,9 +166,8 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
         """
         Обертка для синхронного вызова set_active_target в отдельном потоке.
         Нужна что бы не блокировать основной асинхронный поток бота при вызове set_active_target.
-        Предполагается, что set_active_target сама управляет сессией БД через with session_scope().
         """
-        return set_active_target(target_id, title)
+        return pt_repo.set_active_target(target_id, title)
 
     try:
         # Получаем данные из состояния
@@ -226,18 +181,6 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
         
         # Проверяем, может ли постинг-бот отправлять сообщения в канал
         await message.answer("Проверяем доступ бота к каналу...")
-        can_send = await check_posting_bot_can_send(target_id)
-        
-        if not can_send:
-            await message.answer(
-                "❌ Бот не может отправлять сообщения в указанный канал.\n\n"
-                "Пожалуйста, убедитесь, что:\n"
-                "1. Вы добавили бота в канал\n"
-                "2. Бот имеет права администратора для отправки сообщений\n"
-                "3. ID или username канала указан правильно"
-            )
-            await state.clear()
-            return
         
         # Сохраняем в БД
         # Выполняем синхронную функцию _db_call_sync в отдельном потоке через asyncio.to_thread,
@@ -281,16 +224,8 @@ async def cmd_all_channels(message: Message):
         """
         Returns:
             list: Список словарей с информацией о каналах.
-                  Каждый словарь содержит:
-                  - target_chat_id: ID канала
-                  - target_title: Название канала  
-                  - is_active: Статус активности
-                  
-        Note:
-            Функция выполняется в отдельном потоке через asyncio.to_thread,
-            чтобы не блокировать основной поток бота во время работы с БД.
         """
-        return get_all_target_channels()
+        return pt_repo.get_all_target_channels()
     
     all_target_channels = await asyncio.to_thread(_get_sync)
     if not all_target_channels:
@@ -314,7 +249,7 @@ async def cmd_all_channels(message: Message):
 @router.message(Command("view_targets"))
 async def cmd_view_targets(message: Message):
     def _get_target_sync():
-        return get_active_target_info()
+        return pt_repo.get_active_target_info()
         
     active_target = await asyncio.to_thread(_get_target_sync)
     if active_target:
@@ -358,18 +293,11 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     Args:
         message (Message): Объект сообщения от пользователя
         state (FSMContext): Объект состояния FSM для хранения данных между этапами
-
-    Действия:
-    1. Получает ID канала из сообщения
-    2. Проверяет корректность введенного ID
-    3. Деактивирует целевой канал в БД
-    4. Отправляет пользователю сообщение об успешной деактивации
-    5. Очищает состояние FSM
     """
     target_chat_id_str = message.text.strip()
 
     def _deactivate_sync():
-        return deactivate_target_by_id(target_chat_id_str)
+        return pt_repo.deactivate_target_by_id(target_chat_id_str)
 
     # Проверяем, что введенный ID не пустой
     if not target_chat_id_str:
@@ -379,7 +307,6 @@ async def process_deactivate_target(message: Message, state: FSMContext):
     
     # Пытаемся деактивировать канал в БД
     try:
-        # Вызываем функцию деактивации из модуля database.channels
         success = await asyncio.to_thread(_deactivate_sync)
         
         if success:
@@ -420,22 +347,11 @@ async def cmd_delete_target(message:Message, state:FSMContext):
 async def process_delete_target(message:Message, state:FSMContext):
     """
     Обработчик для получения ID канала и его удаления.
-
-    Args:
-        message (Message): Объект сообщения от пользователя
-        state (FSMContext): Объект состояния FSM для хранения данных между этапами
-
-    Действия:
-    1. Получает ID канала из сообщения
-    2. Проверяет корректность введенного ID
-    3. Удаляет целевой канал из БД
-    4. Отправляет пользователю сообщение о результате операции
-    5. Очищает состояние FSM
     """
     target_chat_id_str = message.text.strip()
 
     def _delete_sync():
-            return delete_target_channel(target_chat_id_str)
+        return pt_repo.delete_target_channel(target_chat_id_str)
 
     if not target_chat_id_str:
         await message.answer("❌ Вы не ввели ID канала.")
@@ -473,22 +389,11 @@ async def cmd_activate_target(message:Message, state:FSMContext):
 async def process_activate_target(message:Message, state:FSMContext):
     """
     Обработчик для получения ID канала и его активации.
-
-    Args:
-        message (Message): Объект сообщения от пользователя
-        state (FSMContext): Объект состояния FSM для хранения данных между этапами
-
-    Действия:
-    1. Получает ID канала из сообщения
-    2. Проверяет корректность введенного ID
-    3. Активирует целевой канал в БД
-    4. Отправляет пользователю сообщение о результате операции
-    5. Очищает состояние FSM
     """
     target_chat_id_str = message.text.strip()
 
     def _activate_sync():
-        return activate_target_by_id(target_chat_id_str)
+        return pt_repo.activate_target_by_id(target_chat_id_str)
     
     if not target_chat_id_str:
         await message.answer("❌ Вы не ввели ID канала.")

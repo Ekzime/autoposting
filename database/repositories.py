@@ -1,0 +1,3 @@
+from database.dao.posting_target_repository import PostingTargetRepository
+
+posting_target_repository = PostingTargetRepository()
