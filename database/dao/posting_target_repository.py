@@ -10,11 +10,21 @@ class PostingTargetRepository:
     """
     Репозиторий для управления целевыми каналами для постинга.
     
-    Этот класс предоставляет методы для работы с таблицей PostingTarget в базе данных:
-    - Добавление новых целевых каналов
-    - Активация/деактивация каналов
-    - Получение списка всех каналов
-    - Управление активным каналом для публикации
+    Методы:
+        set_active_target(target_chat_id_str: str, target_title: str | None) -> PostingTarget | None:
+            Устанавливает активную цель для постинга, деактивируя все остальные.
+            
+        get_all_target_channels() -> List[Dict[str, Any]]:
+            Получает список всех целевых каналов из базы данных.
+            
+        get_active_target() -> Dict[str, Any] | None:
+            Получает текущий активный целевой канал.
+            
+        delete_target(target_id: int) -> bool:
+            Удаляет целевой канал по его ID.
+            
+        update_target(target_id: int, new_data: Dict[str, Any]) -> bool:
+            Обновляет данные целевого канала.
     
     Использует глобальный session_scope для управления сессиями БД.
     """

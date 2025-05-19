@@ -9,19 +9,32 @@ from database.manager import session_scope
 class ParsingSourceRepository:
     """
     Репозиторий для работы с источниками парсинга.
-    Предоставляет методы для управления источниками данных, которые будут парситься.
+
+    Методы:
+        add_source_to_target(posting_target_db_id: int, source_identifier: str, source_title: str | None) -> ParsingSourceChannel | None | str:
+            Добавляет новый источник парсинга к указанной цели постинга.
+
+        get_sources_for_target(target_id: int) -> List[Dict[str, Any]]:
+            Получает список источников для указанного целевого канала.
+
+        delete_source_by_id(source_id: int) -> bool:
+            Удаляет источник парсинга по его ID из базы данных.
+
+        change_target_for_source(source_id: int, new_target_id: int) -> bool:
+            Изменяет целевой канал для указанного источника парсинга.
+
+        get_all_sources() -> List[Dict[str, Any]]:
+            Получает все источники парсинга из базы данных.
+    
+    Использует глобальный session_scope для управления сессиями БД.
     """
     def __init__(self):
-        """
-        Инициализация репозитория источников парсинга.
-        Логирует создание экземпляра репозитория.
-        """
         logging.debug("Инициализация ParsingSourceRepository")
 
     def add_source_to_target(self,
                              posting_target_db_id:int,
                              source_identifier:str,
-                             source_title:str | None = None) -> ParsingSourceChannel | None:
+                             source_title:str | None = None) -> ParsingSourceChannel | None | str:
         """
         Добавляет новый источник парсинга к указанной цели постинга.
         
@@ -31,7 +44,10 @@ class ParsingSourceRepository:
             source_title (str | None): Название источника (опционально)
             
         Returns:
-            ParsingSourceChannel | None: Созданный объект источника или None в случае ошибки
+            ParsingSourceChannel | None | str: 
+                - Созданный объект источника при успешном добавлении
+                - "exists" если источник уже существует
+                - None в случае ошибки
             
         Примечание:
             - Проверяет существование источника с таким идентификатором для данной цели
@@ -45,7 +61,7 @@ class ParsingSourceRepository:
                                                                                     posting_target_id=posting_target_db_id)).scalar_one_or_none()
                 if existing_source:
                     logging.warning(f"Источник с идентификатором {source_identifier} уже существует для целевого канала {posting_target_db_id}")
-                    return existing_source
+                    return "exists"
                 
                 # Проверяем существование целевого канала
                 target = db.get(PostingTarget, posting_target_db_id)
