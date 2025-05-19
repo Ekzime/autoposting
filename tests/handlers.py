@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
 from telegram.bot.handlers.target_chanels_handlers import router
+from telegram.bot.handlers.source_chanels_handlers import router as source_router
 
 # Загрузка .env файла
 load_dotenv()
@@ -41,7 +42,8 @@ async def main():
     # Регистрируем обработчики
     logger.info("Регистрируем роутер")
     dp.include_router(router)
-    
+    dp.include_router(source_router)
+
     # Выводим все зарегистрированные обработчики
     logger.info("Зарегистрированные обработчики:")
     for router_obj in dp.sub_routers:
