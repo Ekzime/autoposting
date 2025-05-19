@@ -883,3 +883,99 @@ async def process_delete_confirmation(message: Message, state: FSMContext):
         await state.clear()
 
 
+#######################################################################
+#                                                                     #
+#                    View All Sources                                 #
+#                                                                     #
+#######################################################################
+@router.message(Command("view_all_sources"))
+async def cmd_view_all_sources(message: Message):
+    """
+    Обработчик команды /view_all_sources для просмотра всех источников парсинга.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+    
+    Действия:
+        1. Получает список всех источников из базы данных
+        2. Получает список всех целевых каналов для отображения их названий
+        3. Формирует и отправляет структурированный список всех источников
+        4. Группирует источники по целевым каналам для лучшей читаемости
+    """
+    try:
+        # Получаем все источники и целевые каналы из базы данных
+        def _get_all_sources_sync():
+            return ps_repo.get_all_sources()
+            
+        def _get_all_targets_sync():
+            return pt_repo.get_all_target_channels()
+        
+        sources = await asyncio.to_thread(_get_all_sources_sync)
+        targets = await asyncio.to_thread(_get_all_targets_sync)
+        
+        if not sources:
+            await message.answer(
+                "ℹ️ <b>Нет доступных источников</b>\n\n"
+                "Добавьте источники с помощью команды /add_source",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Создаем словарь для быстрого поиска названий каналов по их ID
+        target_names = {}
+        for target in targets:
+            target_names[target['id']] = {
+                'name': target['target_title'] or target['target_chat_id'],
+                'is_active': target['is_active']
+            }
+        
+        # Группируем источники по целевым каналам
+        sources_by_target = {}
+        for source in sources:
+            target_id = source['posting_target_id']
+            if target_id not in sources_by_target:
+                sources_by_target[target_id] = []
+            sources_by_target[target_id].append(source)
+        
+        # Формируем сообщение с группировкой по целевым каналам
+        message_parts = ["📋 <b>Список всех источников парсинга</b>\n"]
+        
+        for target_id, target_sources in sources_by_target.items():
+            target_info = target_names.get(target_id, {'name': f"ID: {target_id}", 'is_active': False})
+            target_name = target_info['name']
+            is_active = target_info['is_active']
+            
+            # Добавляем заголовок целевого канала
+            status_emoji = "✅" if is_active else "❌"
+            message_parts.append(f"\n🎯 <b>Целевой канал:</b> {target_name} {status_emoji}")
+            
+            # Добавляем список источников для этого целевого канала
+            for source in target_sources:
+                source_id = source['id']
+                source_identifier = source['source_identifier']
+                source_title = source['source_title'] or source_identifier
+                
+                message_parts.append(
+                    f"  📌 <code>{source_id}</code>: <b>{source_title}</b> "
+                    f"(<code>{source_identifier}</code>)"
+                )
+        
+        # Добавляем подсказку с доступными командами
+        message_parts.append(
+            "\n\n<i>Доступные команды:</i>\n"
+            "/add_source - добавить новый источник\n"
+            "/update_source - изменить существующий источник\n"
+            "/delete_source - удалить источник"
+        )
+        
+        # Отправляем сообщение
+        await message.answer("\n".join(message_parts), parse_mode="HTML")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка всех источников: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка при получении списка источников</b>",
+            parse_mode="HTML"
+        )
+
+
