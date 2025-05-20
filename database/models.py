@@ -71,6 +71,20 @@ class ParsingSourceChannel(BaseModel):
     def __repr__(self):
         return f"<ParsingSourceChannel(id={self.id}, source='{self.source_identifier}', target_id={self.posting_target_id})>"
 
+class ParsingTelegramAccount(BaseModel):
+    __tablename__ = "parsing_telegram_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    phone_number: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)  # Формат: +XXXXXXXXXXX с кодом страны
+    session_string: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending_auth", index=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    def __repr__(self):
+        return f"<ParsingTelegramAccount(id={self.id}, phone={self.phone_number}, status={self.status}, active={self.is_active})>"
+    
 
 class Channels(BaseModel):
     __tablename__ = "channels"
