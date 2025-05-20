@@ -7,6 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from config import settings
 from telegram.bot.handlers.target_chanels_handlers import router
 from telegram.bot.handlers.source_chanels_handlers import router as source_router
+from telegram.bot.handlers.telethon_handlers import router as telethon_router
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, 
@@ -40,6 +41,7 @@ async def main():
     logger.info("Регистрируем роутер")
     dp.include_router(router)
     dp.include_router(source_router)
+    dp.include_router(telethon_router)
 
     # Выводим все зарегистрированные обработчики
     logger.info("Зарегистрированные обработчики:")

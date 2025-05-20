@@ -4,6 +4,9 @@ import logging
 from aiogram import Dispatcher, Bot
 from aiogram.fsm.storage.memory import MemoryStorage
 from telegram.bot.posting_worker import run_periodic_tasks as posting_worker_run
+from telegram.bot.handlers.target_chanels_handlers import router as target_router
+from telegram.bot.handlers.source_chanels_handlers import router as source_router
+from telegram.bot.handlers.telethon_handlers import router as telethon_router
 from config import settings
 
 logging.basicConfig(
@@ -87,7 +90,12 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
-
+    
+    # Регистрация обработчиков
+    dp.include_router(target_router)
+    dp.include_router(source_router)
+    dp.include_router(telethon_router)
+    
     try:
         await dp.start_polling(main_bot)
     except Exception as e:

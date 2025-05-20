@@ -1,5 +1,6 @@
-from typing import Optional
-from pydantic import BaseModel, Field, validator
+from typing import Optional, Dict, Any
+import os
+from pydantic import BaseModel, Field, validator, ConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -7,12 +8,24 @@ class AIServiceSettings(BaseModel):
     """Настройки сервиса искусственного интеллекта"""
     gemini_key: str  # Ключ API для Gemini
     api_url: str = Field(..., description="URL API искусственного интеллекта для фильтрации")
+    
+    model_config = ConfigDict(extra="allow")
 
 
 class TelegramBotSettings(BaseModel):
     """Настройки бота Telegram"""
     bot_token: str  # Токен бота Telegram
     bot_token_main: Optional[str] = None  # Опциональный основной токен бота
+    
+    model_config = ConfigDict(extra="allow")
+
+
+class TelegramApiSettings(BaseModel):
+    """Настройки API Telegram для работы с клиентами"""
+    api_id: int  # ID приложения Telegram API
+    api_hash: str  # Хеш приложения Telegram API
+    
+    model_config = ConfigDict(extra="allow")
 
 
 class TelegramParserSettings(BaseModel):
@@ -22,59 +35,95 @@ class TelegramParserSettings(BaseModel):
     api_hash: str  # Хеш приложения Telegram API
     session: str  # Имя файла сессии Telegram
     photo_storage: str  # Путь для хранения фотографий
+    
+    model_config = ConfigDict(extra="allow")
 
 
 class DatabaseSettings(BaseModel):
     """Настройки базы данных"""
     connect_string: str  # Строка подключения к базе данных
+    
+    model_config = ConfigDict(extra="allow")
 
 
 class Settings(BaseSettings):
     """Основные настройки приложения, загружаемые из переменных окружения"""
     ai_service: AIServiceSettings  # Настройки сервиса ИИ
     telegram_bot: TelegramBotSettings  # Настройки бота Telegram
+    telegram_api: TelegramApiSettings  # Настройки API Telegram для аутентификации
     telegram_parser: TelegramParserSettings  # Настройки парсера Telegram
     database: DatabaseSettings  # Настройки базы данных
     
-    class Config:
-        """Конфигурация для загрузки настроек"""
-        env_file = '.env'  # Файл с переменными окружения
-        env_file_encoding = 'utf-8'  # Кодировка файла
-        env_nested_delimiter = '__'  # Разделитель для вложенных настроек
-        
-    @classmethod
-    def from_env(cls):
-        """Создание настроек из переменных окружения"""
-        return cls(
-            ai_service=AIServiceSettings(
-                gemini_key=cls._get_env("GEMINI_KEY"),
-                api_url=cls._get_env("AI_API_URL")
-            ),
-            telegram_bot=TelegramBotSettings(
-                bot_token=cls._get_env("TELEGRAM_BOT_TOKEN"),
-                bot_token_main=cls._get_env("TELEGRAM_BOT_TOKEN_MAIN", None)
-            ),
-            telegram_parser=TelegramParserSettings(
-                phone_number=cls._get_env("PHONE_NUMBER", None),
-                api_id=int(cls._get_env("API_ID")),
-                api_hash=cls._get_env("API_HASH"),
-                session=cls._get_env("SESSION"),
-                photo_storage=cls._get_env("PHOTO_STORAGE")
-            ),
-            database=DatabaseSettings(
-                connect_string=cls._get_env("DB_CONNECT_STRING")
-            )
-        )
+    model_config = ConfigDict(
+        extra="allow",
+        env_file='.env',  # Файл с переменными окружения
+        env_file_encoding='utf-8',  # Кодировка файла
+        env_nested_delimiter='__'  # Разделитель для вложенных настроек
+    )
     
-    @staticmethod
-    def _get_env(key, default=...):
-        """Вспомогательный метод для получения переменных окружения с обработкой ошибок"""
-        import os
-        value = os.environ.get(key, default)
-        if value is ...:
-            raise ValueError(f"Переменная окружения {key} не установлена")
-        return value
+    @classmethod
+    def create(cls) -> 'Settings':
+        """
+        Создает экземпляр настроек с заполненными полями из переменных окружения.
+        Используется для обхода проблем с вложенными моделями в Pydantic.
+        """
+        # Загрузка переменных из .env файла
+        from dotenv import load_dotenv
+        load_dotenv()
+        
+        # Создаем настройки для ИИ сервиса
+        ai_service = AIServiceSettings(
+            gemini_key=os.getenv("GEMINI_KEY", ""),
+            api_url=os.getenv("AI_API_URL", "")
+        )
+        
+        # Настройки для бота Telegram
+        telegram_bot = TelegramBotSettings(
+            bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            bot_token_main=os.getenv("TELEGRAM_BOT_TOKEN_MAIN")
+        )
+        
+        # API настройки Telegram
+        telegram_api = TelegramApiSettings(
+            api_id=int(os.getenv("API_ID", 0)),
+            api_hash=os.getenv("API_HASH", "")
+        )
+        
+        # Настройки парсера Telegram
+        telegram_parser = TelegramParserSettings(
+            phone_number=os.getenv("PHONE_NUMBER"),
+            api_id=int(os.getenv("API_ID", 0)),
+            api_hash=os.getenv("API_HASH", ""),
+            session=os.getenv("SESSION", ""),
+            photo_storage=os.getenv("PHOTO_STORAGE", "")
+        )
+        
+        # Настройки базы данных
+        database = DatabaseSettings(
+            connect_string=os.getenv("DB_CONNECT_STRING", "")
+        )
+        
+        # Создаем объект настроек
+        return cls(
+            ai_service=ai_service,
+            telegram_bot=telegram_bot,
+            telegram_api=telegram_api,
+            telegram_parser=telegram_parser,
+            database=database
+        )
 
 
 # Создание глобального экземпляра настроек
-settings = Settings.from_env() 
+try:
+    settings = Settings.create()
+except Exception as e:
+    import logging
+    logging.error(f"Ошибка инициализации настроек: {e}")
+    # Создаем минимальный объект для избежания ошибок импорта
+    settings = Settings(
+        ai_service=AIServiceSettings(gemini_key="", api_url=""),
+        telegram_bot=TelegramBotSettings(bot_token=""),
+        telegram_api=TelegramApiSettings(api_id=0, api_hash=""),
+        telegram_parser=TelegramParserSettings(api_id=0, api_hash="", session="", photo_storage=""),
+        database=DatabaseSettings(connect_string="")
+    ) 
