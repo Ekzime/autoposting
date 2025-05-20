@@ -32,12 +32,16 @@ class ParsingTelegramAccRepository:
                 )
                 db.add(new_account)
                 db.flush()  # Используем flush вместо commit, т.к. commit выполнится автоматически при выходе из контекстного менеджера
-                return new_account
+                return {
+                    "id": new_account.id,
+                    "phone_number": new_account.phone_number,
+                    "session_string": new_account.session_string
+                }
         except Exception as e:
             logging.error(f"Ошибка при добавлении аккаунта: {e}")
             return None
         
-    def get_account_by_phone(phone_number: str) -> Dict[str, Any] | None:
+    def get_account_by_phone(self, phone_number: str) -> Dict[str, Any] | None:
         """
         Получает аккаунт по номеру телефона.
         """
@@ -56,7 +60,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при получении аккаунта: {e}")
             return None
     
-    def get_account_by_id(account_db_id: int) -> Dict[str, Any] | None:
+    def get_account_by_id(self, account_db_id: int) -> Dict[str, Any] | None:
         """
         Получает аккаунт по его ID.
         """
@@ -75,7 +79,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при получении аккаунта: {e}")
             return None
 
-    def get_all_accounts() -> List[Dict[str, Any]]:
+    def get_all_accounts(self) -> List[Dict[str, Any]]:
         """
         Получает все аккаунты из базы данных.
         """
@@ -98,10 +102,16 @@ class ParsingTelegramAccRepository:
     def update_account_session(self,
                               account_db_id: int,
                               session_string: str,
-                              account_telegram_id: int,
-                              status: str) -> bool:
+                              account_telegram_id: int = None,
+                              status: str = "authenticated") -> bool:
         """
         Обновление строки сессии, Telegram ID и статуса после успешной авторизации
+            
+        Args:
+            account_db_id (int): ID аккаунта в базе данных
+            session_string (str): Строка сессии для авторизации
+            account_telegram_id (int, optional): Telegram ID аккаунта, может отсутствовать в модели
+            status (str): Новый статус аккаунта
             
         Returns:
             bool: True в случае успешного обновления, False в случае ошибки
@@ -111,7 +121,9 @@ class ParsingTelegramAccRepository:
                 account = db.get(ParsingTelegramAccount, account_db_id)
                 if account:
                     account.session_string = session_string
-                    account.telegram_id = account_telegram_id
+                    # Только если в модели есть поле telegram_id и передан аргумент
+                    if hasattr(account, "telegram_id") and account_telegram_id is not None:
+                        account.telegram_id = account_telegram_id
                     account.status = status
                     db.commit()
                     return True
@@ -142,7 +154,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при обновлении статуса аккаунта: {e}")
             return False
     
-    def set_active_status(account_db_id: int, is_active: bool) -> bool:
+    def set_active_status(self, account_db_id: int, is_active: bool) -> bool:
         """
         Установка статуса активности аккаунта
         
@@ -161,7 +173,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при установке статуса активности аккаунта: {e}")
             return False
     
-    def delete_account(account_db_id: int) -> bool:
+    def delete_account(self, account_db_id: int) -> bool:
         """
         Удаление аккаунта из базы данных
         
@@ -179,7 +191,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при удалении аккаунта: {e}")
             return False
 
-    def get_active_parsing_accounts() -> List[Dict[str, Any]]:
+    def get_active_parsing_accounts(self) -> List[Dict[str, Any]]:
         """
         Получение активных аккаунтов для парсинга
         """
