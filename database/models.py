@@ -13,23 +13,18 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.types import String, Text, DateTime, Integer, JSON, Boolean
 
-# Импорты для работы с переменными окружения
-from dotenv import load_dotenv
-import os
-
 # Импорты для работы с перечислениями
 import enum
 from sqlalchemy import Enum as SQLAlchemyEnum, Text
 
+# Импорт централизованных настроек
+from config import settings
 
 
-# Загрузка переменных окружения
-load_dotenv()
-
-# Получение строки подключения к БД из переменных окружения
-DB_URL = os.getenv("DB_CONNECT_STRING")
+# Получение строки подключения к БД из настроек
+DB_URL = settings.database.connect_string
 if not DB_URL:
-    raise ValueError("Database connection string not found in environment variables")
+    raise ValueError("Database connection string not found in settings")
 
 
 engine = create_engine(DB_URL, echo=False, pool_pre_ping=True) # Создание движка SQLAlchemy

@@ -1,6 +1,5 @@
 import logging
 import asyncio
-from os import getenv
 
 # Библиотеки для работы с ботом
 from aiogram import Router, F, Bot
@@ -8,17 +7,16 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from dotenv import load_dotenv
 
+# Импорт настроек
+from config import settings
 
-# Библиотеки для работы с базой данных
+# Репозитории для работы с базой данных
 from database.repositories import parsing_source_repository as ps_repo
 from database.repositories import posting_target_repository as pt_repo
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 router = Router()
 
@@ -977,5 +975,3 @@ async def cmd_view_all_sources(message: Message):
             "❌ <b>Произошла ошибка при получении списка источников</b>",
             parse_mode="HTML"
         )
-
-

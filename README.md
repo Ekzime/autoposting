@@ -1,4 +1,3 @@
-
 # Auto posting
 
 ## Описание проекта
@@ -79,13 +78,13 @@ uvicorn AIservice.gemini:app --host 127.0.0.1 --port 8000 --reload
 Сервис, который постит информацию в целевой канал. 
 - Вытягивает с БД все поля которые имеют статус NEW.
 - Отправляет в ИИ сервис для обработки и чистки.
-- Постит на калан.
+- Постит на канал, настроенный в базе данных.
 
 Сервис можно запустить отдельно, но перед этим нужно указать в .env:
 ```python
-TELEGRAM_BOT_TOKEN ="your_bot_token"
-TELEGRAM_CHANNEL_ID=@username or ID
+TELEGRAM_BOT_TOKEN="your_bot_token"
 ```
+
 Запуск:
 ```
 python -m telegram.bot.posting_worker

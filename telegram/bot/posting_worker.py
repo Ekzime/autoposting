@@ -11,10 +11,10 @@ from aiogram import Bot
 # SQLAlchemy для работы с базой данных
 from sqlalchemy.orm import sessionmaker  # Для создания сессий БД
 from sqlalchemy import select, update  # Для SQL запросов
-from database.models import Messages, NewsStatus, engine, SessionLocal  # Модели и настройки БД
+from database.models import Messages, NewsStatus, engine, SessionLocal, PostingTarget  # Модели и настройки БД
 
-# Библиотека для работы с .env файлами
-from dotenv import load_dotenv  
+# Импортируем централизованные настройки
+from config import settings
 
 # Настройка базовой конфигурации логгера
 logging.basicConfig(
@@ -23,15 +23,12 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-load_dotenv()
-
-AI_SERVICE_URL = os.getenv("AI_API_URL")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID")
+# Получаем настройки из settings
+AI_SERVICE_URL = settings.ai_service.api_url
+TELEGRAM_BOT_TOKEN = settings.telegram_bot.bot_token
 
 if not AI_SERVICE_URL: logging.warning("AI_API_URL не задан!") 
 if not TELEGRAM_BOT_TOKEN: logging.warning("TELEGRAM_BOT_TOKEN не задан! Постинг не будет работать.")
-if not TELEGRAM_CHANNEL_ID: logging.warning("TELEGRAM_CHANNEL_ID не задан! Постинг не будет работать.")
 
 logging.info("posting_worker.py загружен")
 
@@ -330,7 +327,7 @@ async def main_logic(bot_for_posting: Bot | None):
     1. Запускает обработку сообщений через AI
     2. Делает паузу между этапами
     3. Публикует обработанные сообщения в Telegram канал
-       (если предоставлен бот и ID канала)
+       (если предоставлен бот и каналы настроены в базе данных)
     """
     
     logging.info("main_logic запущен")
@@ -341,14 +338,26 @@ async def main_logic(bot_for_posting: Bot | None):
     await asyncio.sleep(1)  # Пауза между этапами
 
     # Этап 2: Постинг в Telegram
-    if not bot_for_posting or not TELEGRAM_CHANNEL_ID:
+    if not bot_for_posting:
         logging.warning(
-            "Инстанс бота для постинга или ID канала не предоставлены. "
+            "Инстанс бота для постинга не предоставлен. "
             "Этап постинга пропускается."
         )
         return
-        
-    await _process_posting_messages(bot_for_posting)
+    
+    # Получаем активный целевой канал из базы данных
+    def _get_active_target_sync():
+        with SessionLocal() as session:
+            query = select(PostingTarget).where(PostingTarget.is_active == True)
+            return session.execute(query).scalars().first()
+    
+    active_target = await asyncio.to_thread(_get_active_target_sync)
+    
+    if not active_target:
+        logging.info("Нет активного целевого канала в базе данных. Постинг пропускается.")
+        return
+    
+    await _process_posting_messages(bot_for_posting, active_target.target_chat_id)
 
 
 async def run_periodic_tasks(bot_for_posting: Bot | None):
@@ -451,12 +460,13 @@ async def _process_ai_messages():
         await asyncio.sleep(1)
 
 
-async def _process_posting_messages(bot: Bot):
+async def _process_posting_messages(bot: Bot, channel_id: str):
     """
     Обрабатывает сообщения для постинга в Telegram канал.
     
     Args:
         bot (Bot): Экземпляр бота Telegram для отправки сообщений
+        channel_id (str): Идентификатор канала для отправки
         
     Действия:
     1. Получает до 2-х сообщений из БД, готовых к постингу
@@ -478,7 +488,7 @@ async def _process_posting_messages(bot: Bot):
         logging.info("Нет сообщений, готовых к постингу, в этом цикле.")
         return
         
-    logging.info(f"Постинг для {len(messages)} сообщений...")
+    logging.info(f"Постинг для {len(messages)} сообщений в канал {channel_id}...")
     
     for msg in messages:
         if not msg.ai_processed_text:
@@ -490,7 +500,7 @@ async def _process_posting_messages(bot: Bot):
             
         success = await post_message_to_telegram(
             bot,
-            TELEGRAM_CHANNEL_ID,
+            channel_id,
             msg.ai_processed_text,
             msg.id
         )
@@ -509,7 +519,7 @@ def create_bot():
     Returns:
         Bot: Экземпляр бота для постинга
     """
-    token = os.getenv("TELEGRAM_BOT_TOKEN") or None
+    token = settings.telegram_bot.bot_token
     if not token: 
         raise ValueError("Token value getting error! token is None")
     

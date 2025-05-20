@@ -2,7 +2,7 @@ import asyncio
 import os
 import logging
 from aiogram import Bot, Dispatcher
-from dotenv import load_dotenv
+from config import settings
 from datetime import datetime 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,21 +10,16 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-load_dotenv()
-
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID") 
+BOT_TOKEN = settings.telegram_bot.bot_token
+TEST_CHANNEL_ID = "@testAichenelv2"  # Тестовый канал для отправки сообщений
 
 async def send_test_message():
     if not BOT_TOKEN:
-        logging.error("Токен бота (TELEGRAM_BOT_TOKEN) не найден в .env файле!")
-        return
-    if not CHANNEL_ID:
-        logging.error("ID канала (TELEGRAM_CHANNEL_ID) не найден в .env файле!")
+        logging.error("Токен бота не найден в настройках!")
         return
 
     logging.info(f"Используется токен: ...{BOT_TOKEN[-6:]}")
-    logging.info(f"Используется Channel ID из .env: '{CHANNEL_ID}' (тип: {type(CHANNEL_ID)})") 
+    logging.info(f"Используется тестовый Channel ID: '{TEST_CHANNEL_ID}' (тип: {type(TEST_CHANNEL_ID)})") 
 
     bot = Bot(token=BOT_TOKEN)
     
@@ -32,7 +27,7 @@ async def send_test_message():
     text_message = f"Это тестовое сообщение от бота! Время: {datetime.now()}" 
 
     chat_id_to_send: str | int 
-    chat_id_to_send = CHANNEL_ID 
+    chat_id_to_send = TEST_CHANNEL_ID 
 
     logging.info(f"Попытка отправить сообщение в чат/канал: '{chat_id_to_send}' (тип: {type(chat_id_to_send)})")
 
@@ -82,7 +77,7 @@ async def test_direct_sending():
         await bot.session.close()
 
 if __name__ == "__main__":    
-    if os.name == 'nt':
+    if os.name == 'nt':  # Для Windows
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
         
     asyncio.run(test_direct_sending())

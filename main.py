@@ -1,10 +1,10 @@
-import os
 import sys
 import asyncio
 import logging
 from aiogram import Dispatcher, Bot
 from aiogram.fsm.storage.memory import MemoryStorage
 from telegram.bot.posting_worker import run_periodic_tasks as posting_worker_run
+from config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +29,7 @@ async def on_startup(bot: Bot):
     global parser_task, posting_task, bot_for_posting_service_instance
     
     # Получаем токен для бота постинга
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = settings.telegram_bot.bot_token
     if token:
         # Если токен есть - создаем реального бота
         bot_for_posting_service_instance = Bot(token=token)
@@ -77,7 +77,8 @@ async def on_shutdown(bot: Bot):
         await bot_for_posting_service_instance.close()
 
 async def main():
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN_MAIN", os.getenv("TELEGRAM_BOT_TOKEN"))
+    # Use main bot token if available, otherwise use regular bot token
+    bot_token = settings.telegram_bot.bot_token_main or settings.telegram_bot.bot_token
     if not bot_token:
         logging.critical("Bot token not found!")
         return

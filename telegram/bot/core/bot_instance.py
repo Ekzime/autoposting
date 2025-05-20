@@ -1,8 +1,5 @@
 from aiogram import Bot
-import os
-from dotenv import load_dotenv
+from config import settings
 
-load_dotenv()
-
-token = os.getenv("TELEGRAM_BOT_TOKEN")
+token = settings.telegram_bot.bot_token
 bot = Bot(token=token)

@@ -1,7 +1,6 @@
 ###############################
 #           system libs
 #------------------------------
-import os
 import re
 import json
 from typing import List
@@ -9,6 +8,7 @@ from typing import List
 #           my moduls
 #------------------------------
 from .prompts import prompt
+from config import settings
 ###############################
 #            FAST API
 #------------------------------
@@ -19,11 +19,9 @@ from fastapi.middleware.cors import CORSMiddleware
 #       other libs/frameworks
 #------------------------------
 import google.generativeai as genai
-from dotenv import load_dotenv
 
-load_dotenv()
-
-genai.configure(api_key=os.getenv("GEMINI_KEY"))
+# Configure Gemini API
+genai.configure(api_key=settings.ai_service.gemini_key)
 model = genai.GenerativeModel("gemini-1.5-flash")
 
 # Модель для валидации входных данных

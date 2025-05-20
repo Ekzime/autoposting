@@ -4,12 +4,9 @@ import os
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
-from dotenv import load_dotenv
+from config import settings
 from telegram.bot.handlers.target_chanels_handlers import router
 from telegram.bot.handlers.source_chanels_handlers import router as source_router
-
-# Загрузка .env файла
-load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(level=logging.DEBUG, 
@@ -17,7 +14,7 @@ logging.basicConfig(level=logging.DEBUG,
 logger = logging.getLogger(__name__)
 
 # Токен бота
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TOKEN = settings.telegram_bot.bot_token
 if not TOKEN:
     raise ValueError("Не задан TELEGRAM_BOT_TOKEN")
 

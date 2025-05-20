@@ -1,14 +1,7 @@
-from dotenv import load_dotenv
-import os
+from config import settings
 
-load_dotenv()
-
-PHONE_NUMBER = os.getenv("PHONE_NUMBER")
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-SESSION = os.getenv("SESSION")
-PHOTO_STORAGE = os.getenv("PHOTO_STORAGE")
-SOURCE_STOGAGE: list[str | int] = [
-    7783544651,
-    "https://t.me/incrypted"
-]
+PHONE_NUMBER = settings.telegram_parser.phone_number
+API_ID = settings.telegram_parser.api_id
+API_HASH = settings.telegram_parser.api_hash
+SESSION = settings.telegram_parser.session
+PHOTO_STORAGE = settings.telegram_parser.photo_storage

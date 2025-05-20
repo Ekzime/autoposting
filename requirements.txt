@@ -44,6 +44,7 @@ pyaes==1.6.1
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pydantic==2.11.4
+pydantic-settings==2.2.1
 pydantic_core==2.33.2
 PyMySQL==1.1.1
 pyparsing==3.2.3

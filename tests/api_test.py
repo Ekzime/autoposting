@@ -1,11 +1,9 @@
-import os
 import json
 import requests
 from database.messages import get_all_messages
-from dotenv import load_dotenv
+from config import settings
 
-load_dotenv()
-AI_URL = os.getenv("AI_API_URL")
+AI_URL = settings.ai_service.api_url
 
 messages = get_all_messages()
 def ai_post(messages):

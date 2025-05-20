@@ -1,6 +1,5 @@
 import logging
 import asyncio
-from os import getenv
 
 # Библиотеки для работы с ботом
 from aiogram import Router, F, Bot
@@ -8,7 +7,9 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
-from dotenv import load_dotenv
+
+# Импорт настроек
+from config import settings
 
 # Тексты для сообщений
 from telegram.bot.texts.text_for_messages import (
@@ -21,8 +22,6 @@ from database.repositories import posting_target_repository as pt_repo
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 router = Router()
 
