@@ -41,7 +41,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при добавлении аккаунта: {e}")
             return None
         
-    def get_account_by_phone(phone_number: str) -> Dict[str, Any] | None:
+    def get_account_by_phone(self, phone_number: str) -> Dict[str, Any] | None:
         """
         Получает аккаунт по номеру телефона.
         """
@@ -60,7 +60,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при получении аккаунта: {e}")
             return None
     
-    def get_account_by_id(account_db_id: int) -> Dict[str, Any] | None:
+    def get_account_by_id(self, account_db_id: int) -> Dict[str, Any] | None:
         """
         Получает аккаунт по его ID.
         """
@@ -79,7 +79,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при получении аккаунта: {e}")
             return None
 
-    def get_all_accounts() -> List[Dict[str, Any]]:
+    def get_all_accounts(self) -> List[Dict[str, Any]]:
         """
         Получает все аккаунты из базы данных.
         """
@@ -154,7 +154,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при обновлении статуса аккаунта: {e}")
             return False
     
-    def set_active_status(account_db_id: int, is_active: bool) -> bool:
+    def set_active_status(self, account_db_id: int, is_active: bool) -> bool:
         """
         Установка статуса активности аккаунта
         
@@ -173,7 +173,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при установке статуса активности аккаунта: {e}")
             return False
     
-    def delete_account(account_db_id: int) -> bool:
+    def delete_account(self, account_db_id: int) -> bool:
         """
         Удаление аккаунта из базы данных
         
@@ -191,7 +191,7 @@ class ParsingTelegramAccRepository:
             logging.error(f"Ошибка при удалении аккаунта: {e}")
             return False
 
-    def get_active_parsing_accounts() -> List[Dict[str, Any]]:
+    def get_active_parsing_accounts(self) -> List[Dict[str, Any]]:
         """
         Получение активных аккаунтов для парсинга
         """

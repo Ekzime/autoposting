@@ -19,6 +19,7 @@ from config import settings
 
 # Репозитории для работы с базой данных
 from database.repositories import parsing_telegram_acc_repository as pt_repo
+from database.dao.pars_telegram_acc_repository import ParsingTelegramAccRepository
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -36,470 +37,308 @@ class AddAccountStates(StatesGroup):
 #######################################################################
 #                   Account Management Commands                       #
 #######################################################################
-
 @router.message(Command("add_account"))
 async def cmd_add_account(message: Message, state: FSMContext):
-    """Начинает процесс добавления нового аккаунта для парсинга."""
-    try:
-        await message.answer(
-            "📱 <b>Добавление аккаунта для парсинга</b>\n\n"
-            "Пожалуйста, отправьте номер телефона в международном формате, например: <code>+79123456789</code>\n\n"
-            "<i>Этот номер будет использоваться для авторизации в Telegram API и получения данных из каналов.</i>\n\n"
-            "Для отмены операции введите <code>skip</code>",
-            parse_mode="HTML"
-        )
-        
-        await state.set_state(AddAccountStates.waiting_for_phone)
-    except Exception as e:
-        logger.error(f"Ошибка при запуске добавления аккаунта: {e}")
-        await message.answer(
-            "❌ <b>Произошла ошибка</b>\n\n"
-            "Не удалось запустить процесс добавления аккаунта. Пожалуйста, попробуйте позже.",
-            parse_mode="HTML"
-        )
-        await state.clear()
-
-
-@router.message(AddAccountStates.waiting_for_phone, F.text.lower() == "skip")
-async def cancel_add_account(message: Message, state: FSMContext):
-    """Отменяет процесс добавления аккаунта."""
-    # Получаем данные, на случай если аккаунт уже был создан
-    data = await state.get_data()
-    account_id = data.get("account_id")
-    
-    # Если аккаунт уже создан, удаляем его
-    if account_id:
-        await asyncio.to_thread(lambda: pt_repo.delete_account(account_id))
-        logger.info(f"Удален недоактивированный аккаунт с ID {account_id}")
-    
+    """Начинает процесс добавления нового аккаунта Telegram."""
     await message.answer(
-        "❌ <b>Операция отменена</b>\n\n"
-        "Добавление аккаунта было отменено.",
+        "📱 <b>Добавление нового аккаунта</b>\n\n"
+        "⚠️ <b>Важно!</b> Используйте другой аккаунт Telegram, а не тот, с которого вы сейчас общаетесь с ботом. Это связано с особенностями работы Telegram API.\n\n"
+        "Введите номер телефона в международном формате (включая код страны):\n"
+        "Например: <code>+79123456789</code>",
         parse_mode="HTML"
     )
-    await state.clear()
-
+    await state.set_state(AddAccountStates.waiting_for_phone)
 
 @router.message(AddAccountStates.waiting_for_phone)
-async def process_phone_text(message: Message, state: FSMContext):
-    """Обрабатывает ввод номера телефона."""
-    raw_phone = message.text.strip()
+async def process_phone_number(message: Message, state: FSMContext):
+    """Обрабатывает ввод номера телефона и запускает процесс авторизации."""
+    phone_number = message.text.strip()
     
-    # Очищаем номер от всех нецифровых символов
-    digits_only = re.sub(r'[^0-9]', '', raw_phone)
-    
-    # Добавляем + в начало
-    phone_number = '+' + digits_only
-    
-    # Проверяем длину номера (должно быть от 10 до 15 цифр после +)
-    if len(digits_only) < 10 or len(digits_only) > 15:
+    # Проверка формата номера телефона
+    if not re.match(r'^\+\d{10,15}$', phone_number):
         await message.answer(
-            "⚠️ <b>Неверный формат номера</b>\n\n"
-            "Пожалуйста, введите номер телефона в международном формате, например: <code>+79123456789</code>\n\n"
-            "Количество цифр должно быть от 10 до 15 (не считая +).\n\n"
-            "Для отмены операции введите <code>skip</code>",
+            "❌ <b>Некорректный формат номера</b>\n\n"
+            "Номер телефона должен начинаться с '+' и содержать от 10 до 15 цифр.\n"
+            "Попробуйте еще раз или отмените операцию командой /cancel",
             parse_mode="HTML"
         )
         return
     
-    logger.info(f"Распознан номер телефона: {phone_number} из ввода: {raw_phone}")
-    await process_phone_number(message, state, phone_number)
-
-
-async def process_phone_number(message: Message, state: FSMContext, phone_number: str):
-    """Основной обработчик номера телефона."""
+    # Сохраняем номер телефона в состояние FSM
+    await state.update_data(phone_number=phone_number)
+    
+    # Проверяем, существует ли аккаунт с таким номером
+    existing_account = await asyncio.to_thread(
+        lambda: pt_repo.get_account_by_phone(phone_number)
+    )
+    
+    if existing_account:
+        await message.answer(
+            "⚠️ <b>Аккаунт уже существует</b>\n\n"
+            f"Аккаунт с номером {phone_number} уже зарегистрирован в системе.\n"
+            "Используйте другой номер или удалите существующий аккаунт через /delete_account",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+    
     try:
-        # Проверяем, существует ли уже аккаунт с таким номером
-        account_exists = await asyncio.to_thread(
-            lambda: any(account['phone_number'] == phone_number for account in pt_repo.get_all_accounts())
+        # Создаем временный клиент для авторизации
+        client = TelegramClient(
+            StringSession(), 
+            settings.telegram_api.api_id,
+            settings.telegram_api.api_hash
         )
         
-        if account_exists:
-            await message.answer(
-                "⚠️ <b>Аккаунт уже существует</b>\n\n"
-                f"Аккаунт с номером {phone_number} уже зарегистрирован в системе.",
-                parse_mode="HTML"
-            )
-            await state.clear()
-            return
+        await client.connect()
         
-        # Отправляем сообщение о подготовке к отправке кода
+        # Отправляем код авторизации
+        await client.send_code_request(phone_number)
+        
+        # Сохраняем клиент в FSM для дальнейшего использования
+        await state.update_data(client=client)
+        
         await message.answer(
-            "⏳ <b>Подготовка к отправке кода...</b>\n\n"
-            f"Номер телефона: <code>{phone_number}</code>",
+            "✅ <b>Код авторизации отправлен</b>\n\n"
+            "На указанный номер отправлен код подтверждения.\n"
+            "Введите полученный код (только цифры):",
             parse_mode="HTML"
         )
         
-        # Создаем клиент Telegram и отправляем код
-        client = TelegramClient(StringSession(), settings.telegram_api.api_id, settings.telegram_api.api_hash)
+        # Переходим к следующему состоянию - ожидание кода
+        await state.set_state(AddAccountStates.waiting_for_code)
         
-        try:
-            await client.connect()
-            
-            # Проверяем, авторизован ли клиент
-            if await client.is_user_authorized():
-                await handle_already_authorized_client(client, message, state, phone_number)
-                return
-            
-            # Отправляем код авторизации
-            send_code_result = await client.send_code_request(phone_number)
-            phone_code_hash = send_code_result.phone_code_hash
-            temp_session_string = await client.export_session_string()
-            
-            logger.info(f"Код успешно отправлен на номер {phone_number}")
-            
-            # Сохраняем информацию об аккаунте в состоянии
-            await state.update_data(
-                phone_number=phone_number,
-                phone_code_hash=phone_code_hash,
-                temp_session_string=temp_session_string
-            )
-            
-            await message.answer(
-                "✅ <b>Код отправлен</b>\n\n"
-                f"На номер {phone_number} был отправлен код подтверждения.\n"
-                "Пожалуйста, введите его в формате <code>12345</code>.\n\n"
-                "<i>⚠️ ВАЖНО: Не выходите из чата бота! Ждите код и сразу введите его здесь.</i>",
-                parse_mode="HTML"
-            )
-            
-            # Переходим к ожиданию кода
-            await state.set_state(AddAccountStates.waiting_for_code)
-            
-        except PhoneNumberInvalidError:
-            await message.answer(
-                "❌ <b>Неверный формат номера</b>\n\n"
-                "Telegram API не может распознать этот номер телефона. Пожалуйста, убедитесь, что номер введен корректно, включая код страны.",
-                parse_mode="HTML"
-            )
-            await state.clear()
-            
-        except Exception as e:
-            logger.error(f"Ошибка при подключении к Telegram API для номера {phone_number}: {e}")
-            await message.answer(
-                "❌ <b>Ошибка подключения к Telegram API</b>\n\n"
-                f"Не удалось отправить код на номер {phone_number}.\n"
-                f"Ошибка: {str(e)[:100]}...\n\n"
-                "Пожалуйста, проверьте правильность номера и попробуйте позже.",
-                parse_mode="HTML"
-            )
-            await state.clear()
-            
-        finally:
-            if client:
-                await client.disconnect()
-            
+    except PhoneNumberInvalidError:
+        await message.answer(
+            "❌ <b>Недействительный номер телефона</b>\n\n"
+            "Telegram сервер отклонил этот номер как недействительный.\n"
+            "Проверьте номер и попробуйте еще раз, или используйте другой номер.",
+            parse_mode="HTML"
+        )
+        await state.clear()
     except Exception as e:
-        logger.error(f"Общая ошибка при обработке номера телефона {phone_number}: {e}")
+        logger.error(f"Ошибка при отправке кода авторизации: {e}")
         await message.answer(
             "❌ <b>Произошла ошибка</b>\n\n"
-            f"Не удалось обработать номер {phone_number}. Пожалуйста, попробуйте позже.",
+            f"Не удалось отправить код авторизации: {str(e)}\n"
+            "Попробуйте позже или используйте другой номер.",
             parse_mode="HTML"
         )
         await state.clear()
 
-
-async def handle_already_authorized_client(client: TelegramClient, message: Message, state: FSMContext, phone_number: str):
-    """Обрабатывает случай, когда клиент уже авторизован."""
+@router.message(AddAccountStates.waiting_for_code)
+async def process_verification_code(message: Message, state: FSMContext):
+    """Обрабатывает ввод кода подтверждения."""
+    code = message.text.strip()
+    
+    # Проверка формата кода
+    if not re.match(r'^\d{5}$', code):
+        await message.answer(
+            "❌ <b>Некорректный формат кода</b>\n\n"
+            "Код подтверждения должен состоять из 5 цифр.\n"
+            "Попробуйте еще раз или отмените операцию командой /cancel",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Получаем данные из FSM состояния
+    state_data = await state.get_data()
+    phone_number = state_data.get("phone_number")
+    client = state_data.get("client")
+    
+    if not client:
+        logger.error("Клиент Telethon не найден в FSM состоянии")
+        await message.answer(
+            "❌ <b>Произошла ошибка</b>\n\n"
+            "Сессия авторизации устарела или была прервана.\n"
+            "Начните процесс заново с команды /add_account",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+    
     try:
-        # Получаем информацию о пользователе и сохраняем сессию
-        me = await client.get_me()
-        session_string = await client.export_session_string()
-        
-        # Добавляем аккаунт в БД
-        account_id = await asyncio.to_thread(
-            lambda: add_account_to_db(phone_number, session_string)
+        # Пытаемся войти с полученным кодом
+        await message.answer(
+            "⏳ <b>Авторизация...</b>\n\n"
+            "Пожалуйста, подождите, идет подключение к API Telegram.",
+            parse_mode="HTML"
         )
         
-        if account_id:
+        try:
+            # Пытаемся авторизоваться с полученным кодом
+            await client.sign_in(phone_number, code)
+            
+            # Если авторизация прошла успешно, сохраняем сессию
+            string_session = StringSession.save(client.session)
+            
+            # Добавляем аккаунт в базу данных
+            account_info = await asyncio.to_thread(
+                lambda: pt_repo.add_account(phone_number, string_session)
+            )
+            
+            if account_info == "exists":
+                await message.answer(
+                    "⚠️ <b>Аккаунт уже существует</b>\n\n"
+                    f"Аккаунт с номером {phone_number} уже зарегистрирован в системе.",
+                    parse_mode="HTML"
+                )
+            elif account_info:
+                await message.answer(
+                    "✅ <b>Аккаунт успешно добавлен</b>\n\n"
+                    f"Аккаунт с номером {phone_number} успешно добавлен в систему.\n"
+                    f"ID аккаунта: {account_info['id']}",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "❌ <b>Ошибка при сохранении аккаунта</b>\n\n"
+                    "Аккаунт был авторизован, но произошла ошибка при сохранении в базу данных.",
+                    parse_mode="HTML"
+                )
+                
+            # Очищаем состояние FSM
+            await state.clear()
+            
+        except SessionPasswordNeededError:
+            # Если требуется 2FA, переходим к следующему состоянию
             await message.answer(
-                "✅ <b>Аккаунт уже авторизован</b>\n\n"
-                f"Аккаунт {phone_number} уже авторизован в системе и добавлен в базу данных.\n\n"
-                f"✅ ID аккаунта: <code>{account_id}</code>\n"
-                f"✅ Telegram ID: <code>{me.id}</code>\n"
-                f"✅ Статус: <code>активен</code>",
+                "🔐 <b>Требуется двухфакторная аутентификация</b>\n\n"
+                "На этом аккаунте включена двухфакторная аутентификация.\n"
+                "Введите ваш пароль двухфакторной аутентификации:",
+                parse_mode="HTML"
+            )
+            await state.set_state(AddAccountStates.waiting_for_password)
+            
+    except PhoneCodeInvalidError:
+        await message.answer(
+            "❌ <b>Неверный код подтверждения</b>\n\n"
+            "Введенный код неверен. Пожалуйста, проверьте код и введите его снова.",
+            parse_mode="HTML"
+        )
+    except PhoneCodeExpiredError:
+        await message.answer(
+            "❌ <b>Код подтверждения истек</b>\n\n"
+            "Время действия кода истекло. Начните процесс заново с команды /add_account",
+            parse_mode="HTML"
+        )
+        await state.clear()
+    except Exception as e:
+        logger.error(f"Ошибка при вводе кода подтверждения: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка</b>\n\n"
+            f"Ошибка при авторизации: {str(e)}\n"
+            "Попробуйте позже или используйте другой номер.",
+            parse_mode="HTML"
+        )
+        await state.clear()
+
+@router.message(AddAccountStates.waiting_for_password)
+async def process_2fa_password(message: Message, state: FSMContext):
+    """Обрабатывает ввод пароля двухфакторной аутентификации."""
+    password = message.text.strip()
+    
+    # Получаем данные из FSM состояния
+    state_data = await state.get_data()
+    phone_number = state_data.get("phone_number")
+    client = state_data.get("client")
+    
+    if not client:
+        logger.error("Клиент Telethon не найден в FSM состоянии")
+        await message.answer(
+            "❌ <b>Произошла ошибка</b>\n\n"
+            "Сессия авторизации устарела или была прервана.\n"
+            "Начните процесс заново с команды /add_account",
+            parse_mode="HTML"
+        )
+        await state.clear()
+        return
+    
+    try:
+        # Пытаемся войти с паролем 2FA
+        await message.answer(
+            "⏳ <b>Авторизация с 2FA...</b>\n\n"
+            "Пожалуйста, подождите, идет проверка пароля.",
+            parse_mode="HTML"
+        )
+        
+        await client.sign_in(password=password)
+        
+        # Если авторизация прошла успешно, сохраняем сессию
+        string_session = StringSession.save(client.session)
+        
+        # Добавляем аккаунт в базу данных
+        account_info = await asyncio.to_thread(
+            lambda: pt_repo.add_account(phone_number, string_session)
+        )
+        
+        if account_info == "exists":
+            await message.answer(
+                "⚠️ <b>Аккаунт уже существует</b>\n\n"
+                f"Аккаунт с номером {phone_number} уже зарегистрирован в системе.\n"
+                "Существующий аккаунт был обновлен с новой сессией.",
+                parse_mode="HTML"
+            )
+        elif account_info:
+            await message.answer(
+                "✅ <b>Аккаунт успешно добавлен</b>\n\n"
+                f"Аккаунт с номером {phone_number} успешно добавлен в систему.\n"
+                f"ID аккаунта: {account_info['id']}",
                 parse_mode="HTML"
             )
         else:
             await message.answer(
-                "⚠️ <b>Аккаунт уже авторизован, но не удалось добавить в БД</b>\n\n"
-                "Пожалуйста, попробуйте ещё раз.",
+                "❌ <b>Ошибка при сохранении аккаунта</b>\n\n"
+                "Аккаунт был авторизован, но произошла ошибка при сохранении в базу данных.",
                 parse_mode="HTML"
             )
+            
     except Exception as e:
-        logger.error(f"Ошибка при обработке авторизованного клиента: {e}")
+        logger.error(f"Ошибка при вводе пароля 2FA: {e}")
         await message.answer(
             "❌ <b>Произошла ошибка</b>\n\n"
-            "Не удалось сохранить данные авторизованного аккаунта.",
+            f"Ошибка при авторизации с паролем 2FA: {str(e)}\n"
+            "Возможно, введен неверный пароль. Попробуйте снова с команды /add_account",
             parse_mode="HTML"
         )
     finally:
+        # Закрываем клиент и очищаем состояние FSM
+        await client.disconnect()
         await state.clear()
-        if client:
+
+# Обработчик отмены операции в любом состоянии
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    """Отменяет текущую операцию и очищает состояние."""
+    current_state = await state.get_state()
+    
+    if current_state is None:
+        await message.answer(
+            "🤷‍♂️ <b>Нечего отменять</b>\n\n"
+            "В данный момент не выполняется никаких операций.",
+            parse_mode="HTML"
+        )
+        return
+    
+    # Проверяем, есть ли в состоянии клиент Telethon
+    state_data = await state.get_data()
+    client = state_data.get("client")
+    
+    if client:
+        # Отключаем клиент, если он существует
+        try:
             await client.disconnect()
-
-
-@router.message(AddAccountStates.waiting_for_code, F.text.lower() == "skip")
-async def cancel_add_code(message: Message, state: FSMContext):
-    """Отменяет процесс добавления аккаунта на этапе ввода кода."""
-    await message.answer(
-        "❌ <b>Операция отменена</b>\n\n"
-        "Добавление аккаунта было отменено.",
-        parse_mode="HTML"
-    )
+        except Exception as e:
+            logger.error(f"Ошибка при отключении клиента Telethon: {e}")
+    
+    # Очищаем состояние
     await state.clear()
-
-
-@router.message(AddAccountStates.waiting_for_code)
-async def process_code(message: Message, state: FSMContext):
-    """Обрабатывает ввод кода подтверждения."""
-    code = message.text.strip()
-    
-    # Проверяем формат кода (обычно 5 цифр)
-    if not code.isdigit() or len(code) != 5:
-        await message.answer(
-            "⚠️ <b>Неверный формат кода</b>\n\n"
-            "Код должен состоять из 5 цифр. Пожалуйста, проверьте и введите снова.",
-            parse_mode="HTML"
-        )
-        return
-        
-    # Получаем сохраненные данные
-    data = await state.get_data()
-    phone_number = data.get("phone_number")
-    phone_code_hash = data.get("phone_code_hash")
-    temp_session_string = data.get("temp_session_string")
-    
-    if not phone_code_hash or not temp_session_string:
-        logger.error(f"Не найдены необходимые данные для авторизации для номера {phone_number}")
-        await message.answer(
-            "❌ <b>Ошибка авторизации</b>\n\n"
-            "Не удалось найти данные для подтверждения кода. Пожалуйста, начните процесс заново.",
-            parse_mode="HTML"
-        )
-        await state.clear()
-        return
-    
-    # Проверяем код и добавляем аккаунт
-    await verify_code_and_add_account(
-        message=message,
-        state=state,
-        phone_number=phone_number,
-        code=code,
-        phone_code_hash=phone_code_hash,
-        temp_session_string=temp_session_string
-    )
-
-
-async def verify_code_and_add_account(message: Message, state: FSMContext, 
-                                     phone_number: str, code: str, 
-                                     phone_code_hash: str, temp_session_string: str):
-    """Проверяет код подтверждения и добавляет аккаунт в БД."""
-    client = None
-    try:
-        # Восстанавливаем клиент из строки сессии
-        client = TelegramClient(
-            StringSession(temp_session_string), 
-            settings.telegram_api.api_id, 
-            settings.telegram_api.api_hash
-        )
-        
-        await client.connect()
-        
-        # Пытаемся войти с полученным кодом
-        await client.sign_in(phone=phone_number, code=code, phone_code_hash=phone_code_hash)
-        
-        # Успешная авторизация - добавляем аккаунт в БД
-        await handle_successful_auth(client, message, state, phone_number)
-        
-    except SessionPasswordNeededError:
-        # Если требуется 2FA
-        session_string = await client.export_session_string() if client else temp_session_string
-        await handle_2fa_required(message, state, session_string)
-        
-    except (PhoneCodeInvalidError, PhoneCodeExpiredError, SessionExpiredError) as e:
-        # Обработка ошибок кода подтверждения
-        await handle_code_error(e, message, state, phone_number)
-        
-    except Exception as e:
-        # Общая обработка ошибок
-        logger.error(f"Ошибка при авторизации с кодом для номера {phone_number}: {e}")
-        await message.answer(
-            "❌ <b>Ошибка авторизации</b>\n\n"
-            f"Произошла ошибка при проверке кода: {str(e)[:100]}...\n\n"
-            "Пожалуйста, попробуйте еще раз или начните процесс заново с команды /add_account.",
-            parse_mode="HTML"
-        )
-        await state.clear()
-        
-    finally:
-        # Закрываем соединение с клиентом
-        if client:
-            await client.disconnect()
-
-
-async def handle_successful_auth(client: TelegramClient, message: Message, 
-                                state: FSMContext, phone_number: str):
-    """Обрабатывает успешную авторизацию."""
-    try:
-        # Экспортируем строку сессии и данные пользователя
-        session_string = await client.export_session_string()
-        me = await client.get_me()
-        
-        # Добавляем аккаунт в БД
-        account_id = await asyncio.to_thread(
-            lambda: add_account_to_db(phone_number, session_string)
-        )
-        
-        if not account_id:
-            raise Exception("Не удалось добавить аккаунт в базу данных после авторизации")
-        
-        await message.answer(
-            "🎉 <b>Аккаунт успешно добавлен!</b>\n\n"
-            f"Аккаунт {phone_number} успешно авторизован и готов к использованию для парсинга.\n\n"
-            f"✅ ID аккаунта: <code>{account_id}</code>\n"
-            f"✅ Telegram ID: <code>{me.id}</code>\n"
-            f"✅ Статус: <code>активен</code>",
-            parse_mode="HTML"
-        )
-            
-        await state.clear()
-    
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении данных аккаунта: {e}")
-        await message.answer(
-            "❌ <b>Ошибка при добавлении аккаунта</b>\n\n"
-            "Авторизация прошла успешно, но не удалось сохранить данные аккаунта. Пожалуйста, попробуйте еще раз.",
-            parse_mode="HTML"
-        )
-        await state.clear()
-
-
-def add_account_to_db(phone_number: str, session_string: str) -> int:
-    """Добавляет аккаунт в БД и возвращает его ID."""
-    # Добавляем аккаунт
-    new_account = pt_repo.add_account(
-        phone_number=phone_number,
-        session_string=session_string
-    )
-    
-    # Устанавливаем статус активен
-    if new_account and new_account != "exists":
-        account_id = new_account.id
-        pt_repo.set_active_status(account_id, True)
-        return account_id
-    return None
-
-
-async def handle_2fa_required(message: Message, state: FSMContext, session_string: str):
-    """Обрабатывает случай, когда требуется двухфакторная аутентификация."""
-    logger.info("Требуется 2FA для аккаунта")
-    await message.answer(
-        "🔐 <b>Требуется пароль двухфакторной аутентификации</b>\n\n"
-        "Ваш аккаунт защищен двухфакторной аутентификацией.\n"
-        "Пожалуйста, введите пароль от вашего аккаунта.",
-        parse_mode="HTML"
-    )
-    
-    # Сохраняем сессию для последующего использования
-    await state.update_data(temp_session_string=session_string)
-    await state.set_state(AddAccountStates.waiting_for_password)
-
-
-async def handle_code_error(error: Exception, message: Message, state: FSMContext, phone_number: str):
-    """Обрабатывает ошибки кода подтверждения."""
-    error_messages = {
-        PhoneCodeInvalidError: "Неверный код. Пожалуйста, проверьте и введите снова.",
-        PhoneCodeExpiredError: "Срок действия кода истек. Пожалуйста, начните процесс заново с команды /add_account.",
-        SessionExpiredError: "Сессия авторизации истекла. Пожалуйста, начните процесс заново с команды /add_account."
-    }
-    
-    error_type = type(error)
-    logger.error(f"Ошибка авторизации для номера {phone_number}: {error_type.__name__}")
-    
-    # Для истекшего кода предлагаем советы
-    extra_message = ""
-    if error_type == PhoneCodeExpiredError:
-        extra_message = "\n\n<i>Совет: При повторной попытке НЕ ВЫХОДИТЕ из чата бота! Дождитесь код и сразу введите его.</i>"
     
     await message.answer(
-        f"❌ <b>Ошибка авторизации</b>\n\n{error_messages.get(error_type)}{extra_message}",
+        "✅ <b>Операция отменена</b>\n\n"
+        "Все текущие операции отменены.",
         parse_mode="HTML"
     )
-    
-    # Очищаем состояние для истекших кодов и сессий
-    if error_type in (PhoneCodeExpiredError, SessionExpiredError):
-        await state.clear()
-
-
-@router.message(AddAccountStates.waiting_for_password)
-async def process_password(message: Message, state: FSMContext):
-    """Обрабатывает ввод пароля двухфакторной аутентификации."""
-    password = message.text.strip()
-    
-    # Получаем данные из состояния
-    data = await state.get_data()
-    phone_number = data.get("phone_number")
-    temp_session_string = data.get("temp_session_string")
-    
-    if not temp_session_string:
-        logger.error(f"Не найдена строка сессии для 2FA для номера {phone_number}")
-        await message.answer(
-            "❌ <b>Ошибка авторизации</b>\n\n"
-            "Не удалось найти данные сессии для 2FA. Пожалуйста, начните процесс заново.",
-            parse_mode="HTML"
-        )
-        await state.clear()
-        return
-    
-    client = None
-    try:
-        # Создаем клиент Telegram для авторизации
-        client = TelegramClient(
-            StringSession(temp_session_string), 
-            settings.telegram_api.api_id, 
-            settings.telegram_api.api_hash
-        )
-        await client.connect()
-        
-        # Входим с паролем
-        await client.sign_in(password=password)
-        
-        # Получаем данные и сохраняем в БД
-        session_string = await client.export_session_string()
-        me = await client.get_me()
-        
-        # Добавляем аккаунт в БД
-        account_id = await asyncio.to_thread(
-            lambda: add_account_to_db(phone_number, session_string)
-        )
-        
-        if not account_id:
-            raise Exception("Не удалось добавить аккаунт в базу данных")
-        
-        await message.answer(
-            "🎉 <b>Аккаунт успешно добавлен!</b>\n\n"
-            f"Аккаунт {phone_number} успешно авторизован и готов к использованию для парсинга.\n\n"
-            f"✅ ID аккаунта: <code>{account_id}</code>\n"
-            f"✅ Telegram ID: <code>{me.id}</code>\n"
-            f"✅ Статус: <code>активен</code>",
-            parse_mode="HTML"
-        )
-            
-        await state.clear()
-        
-    except Exception as e:
-        logger.error(f"Ошибка при входе с паролем 2FA: {e}")
-        await message.answer(
-            "❌ <b>Неверный пароль</b>\n\n"
-            "Введенный пароль недействителен. Пожалуйста, проверьте и введите снова.",
-            parse_mode="HTML"
-        )
-        
-    finally:
-        if client:
-            await client.disconnect()
-
 
 #######################################################################
 #                 Account View Commands                              #
