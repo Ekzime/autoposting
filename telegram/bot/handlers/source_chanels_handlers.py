@@ -15,6 +15,9 @@ from config import settings
 from database.repositories import parsing_source_repository as ps_repo
 from database.repositories import posting_target_repository as pt_repo
 
+# Импорт функции для обновления парсера
+from telegram.parser.parser_service import trigger_update
+
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
@@ -259,6 +262,10 @@ async def process_source_title(message: Message, state: FSMContext):
                 f"📝 Название источника: <code>{source_title or 'не задано'}</code>",
                 parse_mode="HTML"
             )
+            
+            # Вызываем обновление парсера
+            trigger_update()
+            logger.info(f"Запущено обновление парсера после добавления источника {source_identifier}")
         else:
             # Если произошла ошибка при добавлении
             await message.answer(
@@ -648,6 +655,10 @@ async def process_update_source(message: Message, state: FSMContext):
                 f"{update_info}",
                 parse_mode="HTML"
             )
+            
+            # Вызываем обновление парсера
+            trigger_update()
+            logger.info(f"Запущено обновление парсера после обновления источника {source_id}")
         else:
             await message.answer(
                 "❌ <b>Не удалось обновить источник</b>\n\n"
@@ -849,6 +860,10 @@ async def process_delete_confirmation(message: Message, state: FSMContext):
                     f"Источник с ID <code>{source_id}</code> был удален из базы данных.",
                     parse_mode="HTML"
                 )
+                
+                # Вызываем обновление парсера
+                trigger_update()
+                logger.info(f"Запущено обновление парсера после удаления источника {source_id}")
             else:
                 await message.answer(
                     "❌ <b>Не удалось удалить источник</b>\n\n"
