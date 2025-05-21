@@ -163,10 +163,16 @@ async def join_channel_if_needed(source_identifier):
     global client
     
     try:
+        # Нормализуем идентификатор (убираем @ если есть)
+        if source_identifier.startswith('@'):
+            normalized_identifier = source_identifier[1:]
+        else:
+            normalized_identifier = source_identifier
+            
         # Получаем информацию с таймаутом
         try:
             entity = await asyncio.wait_for(
-                client.get_entity(source_identifier), 
+                client.get_entity(normalized_identifier), 
                 timeout=20
             )
         except asyncio.TimeoutError:
@@ -276,13 +282,16 @@ async def setup_message_handlers(channel_entities):
 
 async def check_updates_loop():
     """Основной цикл проверки обновлений"""
-    global client, active_account_id, active_sources, is_running
+    global client, active_account_id, active_sources, is_running, update_event
     
     logger.info("Запуск основного цикла проверки")
     
     while is_running:
         try:
             logger.info("Начало итерации цикла обновлений")
+            
+            # Сбрасываем событие обновления
+            update_event.clear()
                 
             # Получаем активный аккаунт
             account_data = await get_active_account_from_db()
@@ -338,8 +347,14 @@ async def check_updates_loop():
                     logger.warning("Не удалось подключиться ни к одному каналу")
             
             # Ждем до следующей проверки
-            logger.info("Ожидание 60 секунд")
-            await asyncio.sleep(60)
+            logger.info("Ожидание 60 секунд или события обновления")
+            try:
+                # Ждем событие обновления с таймаутом
+                await asyncio.wait_for(update_event.wait(), timeout=60)
+                logger.info("Получено событие обновления, начинаем новую итерацию")
+            except asyncio.TimeoutError:
+                # Тайм-аут истек, продолжаем штатно
+                pass
             
         except Exception as e:
             logger.error(f"Ошибка в цикле обновлений: {e}")
@@ -381,6 +396,15 @@ def signal_handler(sig, frame):
     global is_running
     print("Получен сигнал завершения, останавливаем парсер...")
     is_running = False
+
+def trigger_update():
+    """
+    Вызывает немедленное обновление списка источников и аккаунта.
+    Эта функция используется для обновления парсера из других модулей.
+    """
+    global update_event
+    update_event.set()
+    logger.info("Запущено обновление парсера")
 
 def start_parser_service():
     """Функция для запуска сервиса из других модулей"""
