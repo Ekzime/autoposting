@@ -483,7 +483,9 @@ async def cmd_delete_account(message: Message):
             parse_mode="HTML"
         )
 
-# Добавим команды для активации/деактивации аккаунтов
+#######################################################################
+#                 Account Activate Commands                           #
+#######################################################################
 @router.message(Command("activate_account"))
 async def cmd_activate_account(message: Message):
     """Активирует аккаунт по его ID."""
@@ -549,6 +551,9 @@ async def cmd_activate_account(message: Message):
             parse_mode="HTML"
         )
 
+#######################################################################
+#                 Account Deactivate Commands                         #
+#######################################################################
 @router.message(Command("deactivate_account"))
 async def cmd_deactivate_account(message: Message):
     """Деактивирует аккаунт по его ID."""

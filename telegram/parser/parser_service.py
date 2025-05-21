@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import re
+import sys
+import signal
 from typing import Dict, List, Optional, Union
 from datetime import datetime
 
@@ -14,48 +16,39 @@ from telethon.tl.types import (
     MessageEntityTextUrl,
     MessageEntityUrl,
     PeerUser,
-    PeerChat
+    PeerChat,
+    MessageViews
 )
 
-# Импорт настроек и фунций для работы с API
+# Импорт настроек
 from config import settings
-from .config import PHOTO_STORAGE
-from .telegram_requests import get_message_views
 
-# Импорт функций для работы с базой данных
-from database.dao.pars_telegram_acc_repository import ParsingTelegramAccRepository
+# Импорт DB-функций
+# Используем функции вместо прямых импортов репозиториев
+from database.repositories import parsing_telegram_acc_repository, parsing_source_repository
 from database.channels import add_channel, get_channel_by_peer_id
 from database.messages import add_message
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
-# Глобальный клиент Telegram
-client = None
+# Константы
+PHOTO_STORAGE = settings.telegram_parser.photo_storage
 
-# Глобальные идентификаторы для отслеживания состояния
+# Глобальные переменные
+client = None
 active_account_id = None
 active_sources = []
-
-# Событие для принудительного обновления
 update_event = asyncio.Event()
-
-# Счетчик обработанных сообщений
 TOTAL_HANDLED = 0
 
+# Статус запуска
+is_running = True
+
 def check_message_for_links(message: Message) -> List[str]:
-    """
-    Проверяет сообщение на наличие ссылок
+    """Проверяет сообщение на наличие ссылок"""
+    found_urls = []
     
-    Args:
-        message: объект сообщения Telegram
-        
-    Returns:
-        Список найденных URL-адресов
-    """
-    found_urls: List[str] = []
-    
-    # Проверка наличия специальных сущностей в сообщении (встроенные ссылки)
     if message.entities:
         for entity in message.entities:
             if isinstance(entity, MessageEntityUrl):
@@ -63,243 +56,145 @@ def check_message_for_links(message: Message) -> List[str]:
             elif isinstance(entity, MessageEntityTextUrl):
                 found_urls.append(entity.url)
     
-    # Если ссылки не найдены через entities, ищем их в тексте через регулярные выражения
     if not found_urls and message.text:
         url_pattern = re.compile(r'https?://\S+|www\.\S+')
         matches = url_pattern.findall(message.text)
-        if matches:
-            for match in matches:
-                if match not in found_urls:
-                    found_urls.append(match)
+        for match in matches:
+            if match not in found_urls:
+                found_urls.append(match)
                     
     return found_urls
 
-async def parse_channel_history(channel_identifier: Union[int, str], limit: Optional[int] = None):
-    """
-    Парсит историю сообщений канала
-    
-    Args:
-        channel_identifier: идентификатор или ссылка на канал
-        limit: ограничение количества сообщений для парсинга
-    """
-    global client
-    
-    if not client:
-        logger.error("Клиент Telegram не инициализирован")
-        return
-    
-    start_timestamp = datetime.now()
-    logger.info(f"Начинаю парсинг канала {channel_identifier}")
-    
+async def get_message_views(client: TelegramClient, message: Message) -> int:
+    """Получает количество просмотров сообщения"""
     try:
-        # Получаем информацию о канале
-        target_entity = await client.get_entity(channel_identifier)
-        
-        # Проверяем, является ли сущность каналом и добавляем в БД
-        if isinstance(target_entity, Channel):
-            logger.info(f"Проверка/добавление основного канала '{target_entity.title}' (ID: {target_entity.id}) в БД")
-            add_channel(target_entity)
-        else:
-            logger.warning(f"Целевая сущность {channel_identifier} не является Channel, пропускаем добавление в БД")
-            return
-    
-        count = 0
-        # Итерируемся по сообщениям канала
-        async for message in client.iter_messages(target_entity):
-            if limit and count >= limit:
-                break
-            
-            count += 1
-            
-            # Обработка фотографий в сообщении
-            photo_path = None
-            if message.photo:
-                photo_path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
-                await message.download_media(photo_path)
-            
-            # Получение ссылок и просмотров
-            links = check_message_for_links(message)
-            views = await get_message_views(client, message)
-            
-            # Добавление сообщения в базу данных
-            add_message(
-                channel_id=target_entity.id,
-                message_id=message.id,
-                text=message.text,
-                date=message.date,
-                photo_path=photo_path,
-                links=links,
-                views=views
-            )
-            
-            if count % 100 == 0:
-                logger.info(f"Обработано {count} сообщений из канала {target_entity.title}")
-        
-        elapsed = datetime.now() - start_timestamp
-        logger.info(f"Парсинг канала {target_entity.title} завершен. Обработано {count} сообщений за {elapsed}")
-        
+        views = await asyncio.wait_for(
+            client(functions.messages.GetMessagesViewsRequest(
+                peer=message.peer_id, id=[message.id], increment=True
+            )),
+            timeout=10
+        )
+        return views.views[0].views
     except Exception as e:
-        logger.error(f"Ошибка при парсинге канала {channel_identifier}: {e}")
+        logger.error(f"Ошибка при получении просмотров: {e}")
+        return 0
 
 async def get_active_account_from_db():
-    """
-    Получает активный аккаунт для парсинга из базы данных.
-    
-    Returns:
-        dict | None: Словарь с данными аккаунта или None, если аккаунт не найден
-    """
-    repo = ParsingTelegramAccRepository()
-    
+    """Получает активный аккаунт из БД"""
     try:
-        # Получаем список активных аккаунтов
-        active_accounts = repo.get_active_parsing_accounts()
+        # Выполняем синхронные операции в отдельном потоке
+        active_accounts = await asyncio.to_thread(parsing_telegram_acc_repository.get_active_parsing_accounts)
+        
         if active_accounts and len(active_accounts) > 0:
-            # Возвращаем первый активный аккаунт
+            logger.info(f"Найден активный аккаунт: ID {active_accounts[0]['id']}")
             return active_accounts[0]
+        
+        logger.warning("Нет активных аккаунтов в БД")
         return None
     except Exception as e:
         logger.error(f"Ошибка при получении активного аккаунта: {e}")
         return None
 
 async def get_parsing_sources_from_db():
-    """
-    Получает список идентификаторов источников для парсинга из базы данных.
-    
-    Returns:
-        list: Список идентификаторов источников
-    """
-    from database.dao.parsing_source_repository import ParsingSourceRepository
-    repo = ParsingSourceRepository()
-    
+    """Получает список источников из БД"""
     try:
-        # Получаем все источники
-        sources = repo.get_all_sources()
-        # Извлекаем только идентификаторы источников
+        sources = await asyncio.to_thread(parsing_source_repository.get_all_sources)
         source_identifiers = [source['source_identifier'] for source in sources]
+        logger.info(f"Получено {len(source_identifiers)} источников для парсинга")
         return source_identifiers
     except Exception as e:
-        logger.error(f"Ошибка при получении источников парсинга: {e}")
+        logger.error(f"Ошибка при получении источников: {e}")
         return []
 
 async def setup_client(account_data):
-    """
-    Настраивает и запускает клиент Telegram.
-    
-    Args:
-        account_data (dict): Данные аккаунта для авторизации
-        
-    Returns:
-        TelegramClient | None: Настроенный клиент или None в случае ошибки
-    """
+    """Создает и подключает клиент Telegram"""
     global client
     
     try:
-        # Создаем временный файл сессии
-        session_file = f"temp_session_{account_data['id']}.session"
-        
-        # Проверяем, есть ли сохраненная строка сессии
-        if account_data.get('session_string'):
-            # Если есть строка сессии, используем ее
-            client = TelegramClient(
-                StringSession(account_data['session_string']),
-                settings.telegram_api.api_id,
-                settings.telegram_api.api_hash
-            )
-        else:
-            # Иначе создаем клиент с файлом сессии
-            client = TelegramClient(
-                session_file,
-                settings.telegram_api.api_id,
-                settings.telegram_api.api_hash
-            )
-        
-        # Подключаемся к серверам Telegram
-        await client.connect()
-        
-        # Проверяем авторизацию
-        if not await client.is_user_authorized():
-            logger.error(f"Клиент не авторизован. Необходимо выполнить вход в аккаунт {account_data['phone_number']}")
+        # Проверка API настроек
+        if not settings.telegram_api.api_id or not settings.telegram_api.api_hash:
+            logger.error("API ID/Hash не настроены")
             return None
         
-        logger.info(f"Клиент успешно настроен для аккаунта {account_data['phone_number']}")
-        return client
+        # Проверка сессии
+        if not account_data.get('session_string'):
+            logger.error("Отсутствует строка сессии")
+            return None
+            
+        # Создаем клиента
+        client = TelegramClient(
+            StringSession(account_data['session_string']),
+            settings.telegram_api.api_id,
+            settings.telegram_api.api_hash
+        )
+        
+        # Подключаемся с таймаутом
+        logger.info("Подключение к Telegram...")
+        try:
+            await asyncio.wait_for(client.connect(), timeout=30)
+        except asyncio.TimeoutError:
+            logger.error("Превышен таймаут подключения")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка подключения: {e}")
+            return None
+        
+        # Проверяем авторизацию
+        try:
+            is_authorized = await asyncio.wait_for(client.is_user_authorized(), timeout=10)
+            if not is_authorized:
+                logger.error("Клиент не авторизован")
+                return None
+            
+            # Получаем данные пользователя
+            me = await asyncio.wait_for(client.get_me(), timeout=10)
+            logger.info(f"Авторизованы как: {me.first_name} {me.last_name or ''}")
+            
+            return client
+        except Exception as e:
+            logger.error(f"Ошибка проверки авторизации: {e}")
+            return None
     except Exception as e:
         logger.error(f"Ошибка при настройке клиента: {e}")
         return None
 
 async def join_channel_if_needed(source_identifier):
-    """
-    Присоединяется к каналу, если пользователь еще не является его участником.
-    
-    Args:
-        source_identifier (str): Идентификатор канала (ссылка, username)
-        
-    Returns:
-        Channel | None: Объект канала или None в случае ошибки
-    """
+    """Присоединяется к каналу если нужно"""
     global client
     
     try:
-        # Получаем информацию о канале
-        entity = await client.get_entity(source_identifier)
-        
-        # Проверяем, что это канал
+        # Получаем информацию с таймаутом
+        try:
+            entity = await asyncio.wait_for(
+                client.get_entity(source_identifier), 
+                timeout=20
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Таймаут при получении данных канала {source_identifier}")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка при получении данных канала {source_identifier}: {e}")
+            return None
+            
+        # Проверяем тип
         if not isinstance(entity, Channel):
             logger.warning(f"Источник {source_identifier} не является каналом")
             return None
-        
-        try:
-            # Пытаемся получить полную информацию о канале
-            # Это удастся только если мы уже участник
-            full_channel = await client(functions.channels.GetFullChannelRequest(
-                channel=entity
-            ))
-            logger.info(f"Уже подписан на канал: {entity.title}")
-            return entity
-        except Exception:
-            # Если не удалось, пробуем присоединиться
-            try:
-                # Проверяем, является ли источник инвайт-ссылкой
-                if source_identifier.startswith(('https://t.me/joinchat/', 'https://t.me/+', 't.me/joinchat/', 't.me/+')):
-                    # Извлекаем хеш из ссылки
-                    if '/joinchat/' in source_identifier:
-                        invite_hash = source_identifier.split('/joinchat/')[1]
-                    else:
-                        invite_hash = source_identifier.split('/+')[1]
-                    
-                    # Присоединяемся по хешу
-                    await client(functions.messages.ImportChatInviteRequest(
-                        hash=invite_hash
-                    ))
-                    
-                    # Пытаемся получить канал по хешу после присоединения
-                    entity = await client.get_entity(source_identifier)
-                    logger.info(f"Успешно присоединился к каналу по инвайт-ссылке: {entity.title}")
-                    return entity
-                else:
-                    # Если это публичный канал, просто возвращаем сущность
-                    logger.info(f"Использую публичный канал: {entity.title}")
-                    return entity
-            except Exception as e:
-                logger.error(f"Не удалось присоединиться к каналу {source_identifier}: {e}")
-                return None
+            
+        logger.info(f"Успешно получен канал: {entity.title}")
+        return entity
     except Exception as e:
-        logger.error(f"Ошибка при обработке источника {source_identifier}: {e}")
+        logger.error(f"Общая ошибка при подключении к {source_identifier}: {e}")
         return None
 
 async def handle_new_message(event):
-    """
-    Обрабатывает новое сообщение из канала.
-    
-    Args:
-        event: Событие нового сообщения
-    """
+    """Обрабатывает новое сообщение"""
     global TOTAL_HANDLED
     
     try:
         message = event.message
         
-        # Получаем ID канала из peer_id
+        # Получаем ID канала
         if isinstance(message.peer_id, PeerChannel):
             channel_id = message.peer_id.channel_id
         elif isinstance(message.peer_id, PeerChat):
@@ -307,37 +202,36 @@ async def handle_new_message(event):
         elif isinstance(message.peer_id, PeerUser):
             channel_id = message.peer_id.user_id
         else:
-            # Для других типов peer_id
-            channel_id = getattr(message.peer_id, 'channel_id', None) or getattr(message.peer_id, 'chat_id', None) or getattr(message.peer_id, 'user_id', None)
-            if not channel_id:
-                logger.warning(f"Не удалось определить ID канала из peer_id: {message.peer_id}")
-                return
-        
-        # Проверяем наличие канала в БД
-        channel = get_channel_by_peer_id(channel_id)
+            logger.warning(f"Неизвестный тип peer_id: {message.peer_id}")
+            return
+            
+        # Проверяем канал в БД
+        channel = await asyncio.to_thread(get_channel_by_peer_id, channel_id)
         if not channel:
-            # Получаем полную информацию о канале
-            channel_entity = await client.get_entity(PeerChannel(channel_id))
-            if isinstance(channel_entity, Channel):
-                # Добавляем канал в БД
-                add_channel(channel_entity)
-                logger.info(f"Канал '{channel_entity.title}' добавлен в БД")
-            else:
-                logger.warning(f"Не удалось добавить канал {channel_id} в БД")
+            try:
+                channel_entity = await client.get_entity(PeerChannel(channel_id))
+                await asyncio.to_thread(add_channel, channel_entity)
+            except Exception as e:
+                logger.error(f"Ошибка при добавлении канала: {e}")
                 return
         
-        # Обрабатываем фотографии в сообщении
+        # Обрабатываем фото
         photo_path = None
-        if message.photo:
-            photo_path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
-            await message.download_media(photo_path)
+        if message.photo and PHOTO_STORAGE:
+            try:
+                photo_path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
+                await asyncio.wait_for(message.download_media(photo_path), timeout=20)
+            except Exception as e:
+                logger.error(f"Ошибка при скачивании фото: {e}")
+                photo_path = None
         
         # Получаем ссылки и просмотры
         links = check_message_for_links(message)
         views = await get_message_views(client, message)
         
-        # Добавляем сообщение в базу данных
-        add_message(
+        # Добавляем сообщение в БД
+        await asyncio.to_thread(
+            add_message,
             channel_id=channel_id,
             message_id=message.id,
             text=message.text,
@@ -348,164 +242,194 @@ async def handle_new_message(event):
         )
         
         TOTAL_HANDLED += 1
-        logger.info(f"Добавлено новое сообщение из канала {channel_id}, ID сообщения: {message.id}, всего обработано: {TOTAL_HANDLED}")
+        logger.info(f"Обработано сообщение ID: {message.id}, всего: {TOTAL_HANDLED}")
     except Exception as e:
-        logger.error(f"Ошибка при обработке нового сообщения: {e}")
+        logger.error(f"Ошибка при обработке сообщения: {e}")
 
 async def setup_message_handlers(channel_entities):
-    """
-    Настраивает обработчики новых сообщений для списка каналов.
-    
-    Args:
-        channel_entities (list): Список объектов каналов
-    """
+    """Настраивает обработчики сообщений"""
     global client
     
     try:
         # Очищаем предыдущие обработчики
         try:
-            client.remove_event_handler(message_handler_callback, events.NewMessage)
-        except Exception:
-            # Игнорируем ошибку, если обработчик еще не был установлен
+            client.remove_event_handler(handle_new_message, events.NewMessage)
+        except:
             pass
-        
-        # Получаем список ID каналов, отфильтровывая None
+            
+        # Получаем ID каналов
         channel_ids = [entity.id for entity in channel_entities if entity]
         
         if not channel_ids:
-            logger.warning("Нет каналов для настройки обработчиков")
+            logger.warning("Нет каналов для отслеживания")
             return
             
-        # Регистрируем обработчик для всех каналов
-        @client.on(events.NewMessage(chats=channel_ids))
-        async def message_handler_callback(event):
-            await handle_new_message(event)
+        # Настраиваем обработчик
+        client.add_event_handler(
+            handle_new_message,
+            events.NewMessage(chats=channel_ids)
+        )
         
-        logger.info(f"Установлены обработчики для {len(channel_ids)} каналов")
+        logger.info(f"Настроены обработчики для {len(channel_ids)} каналов")
     except Exception as e:
-        logger.error(f"Ошибка при настройке обработчиков сообщений: {e}")
+        logger.error(f"Ошибка при настройке обработчиков: {e}")
 
 async def check_updates_loop():
-    """
-    Периодически проверяет изменения в базе данных и обновляет 
-    список источников для парсинга и активный аккаунт.
-    """
-    global client, active_account_id, active_sources, update_event
+    """Основной цикл проверки обновлений"""
+    global client, active_account_id, active_sources, is_running
     
-    while True:
+    logger.info("Запуск основного цикла проверки")
+    
+    # Счетчик для отладки
+    attempt_count = 0
+    max_attempts = 3
+    
+    while is_running:
         try:
-            # Проверяем активный аккаунт
+            attempt_count += 1
+            logger.info(f"Начало итерации #{attempt_count}")
+            
+            # Для отладки
+            if attempt_count > max_attempts:
+                logger.info(f"Достигнуто максимальное число попыток ({max_attempts}), завершаем...")
+                break
+                
+            # Получаем активный аккаунт
             account_data = await get_active_account_from_db()
             
-            # Если нет активного аккаунта, ждем и проверяем снова
             if not account_data:
-                logger.warning("Нет активного аккаунта для парсинга. Ожидание...")
-                if client:
-                    await client.disconnect()
-                    client = None
-                # Ждем 60 секунд или сигнала обновления
-                await wait_for_update_or_timeout(60)
+                logger.warning("Нет активного аккаунта, ожидание 30 сек...")
+                await asyncio.sleep(30)
                 continue
-            
-            # Проверяем, изменился ли активный аккаунт
+                
+            # Проверяем изменения аккаунта
             if active_account_id != account_data['id']:
-                # Если изменился, перенастраиваем клиент
+                logger.info(f"Смена активного аккаунта на ID: {account_data['id']}")
+                
+                # Отключаем предыдущий клиент
                 if client:
                     await client.disconnect()
-                
+                    
+                # Настраиваем новый клиент
                 active_account_id = account_data['id']
                 client = await setup_client(account_data)
                 
                 if not client:
-                    logger.error("Не удалось настроить клиент. Повтор через 60 секунд.")
-                    await wait_for_update_or_timeout(60)
+                    logger.error("Ошибка настройки клиента")
+                    active_account_id = None
+                    await asyncio.sleep(30)
                     continue
             
-            # Получаем текущие источники для парсинга
+            # Получаем источники
             current_sources = await get_parsing_sources_from_db()
             
-            # Проверяем, изменился ли список источников
+            if not current_sources:
+                logger.warning("Нет источников для парсинга")
+                await asyncio.sleep(30)
+                continue
+                
+            # Проверяем изменения в источниках
             if set(current_sources) != set(active_sources):
-                # Если список изменился, обновляем источники
+                logger.info("Обновление списка источников")
                 active_sources = current_sources
                 
-                # Присоединяемся к каналам и получаем их сущности
+                # Подключаемся к каналам
                 channel_entities = []
                 for source in active_sources:
                     entity = await join_channel_if_needed(source)
                     if entity:
                         channel_entities.append(entity)
-                
-                # Настраиваем обработчики сообщений для новых каналов
-                await setup_message_handlers(channel_entities)
-                
-                logger.info(f"Обновлен список каналов для парсинга. Отслеживается {len(channel_entities)} каналов.")
+                        
+                # Настраиваем обработчики
+                if channel_entities:
+                    await setup_message_handlers(channel_entities)
+                    logger.info(f"Отслеживается {len(channel_entities)} каналов")
+                else:
+                    logger.warning("Не удалось подключиться ни к одному каналу")
             
-            # Сбрасываем событие обновления
-            update_event.clear()
-            
-            # Ждем 5 минут или сигнала обновления
-            await wait_for_update_or_timeout(300)
+            # Ждем до следующей проверки
+            logger.info("Ожидание 60 секунд")
+            await asyncio.sleep(60)
             
         except Exception as e:
-            logger.error(f"Ошибка в цикле проверки обновлений: {e}")
-            await wait_for_update_or_timeout(60)
-
-async def wait_for_update_or_timeout(timeout):
-    """
-    Ожидает либо сигнала обновления, либо истечения тайм-аута.
-    
-    Args:
-        timeout (int): Время ожидания в секундах
-    """
-    try:
-        await asyncio.wait_for(update_event.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        pass
-
-def trigger_update():
-    """
-    Вызывает немедленное обновление списка источников и аккаунта.
-    Эта функция нужна для использования в обработчиках изменений.
-    """
-    update_event.set()
-    logger.info("Запущено обновление парсера")
+            logger.error(f"Ошибка в цикле обновлений: {e}")
+            await asyncio.sleep(30)
 
 async def run_parser():
-    """
-    Запускает сервис парсера.
-    """
+    """Запускает сервис парсера"""
+    global is_running
+    
     try:
-        # Запускаем цикл проверки обновлений
-        update_task = asyncio.create_task(check_updates_loop())
+        # Проверяем папку для фото
+        if PHOTO_STORAGE and not os.path.exists(PHOTO_STORAGE):
+            try:
+                os.makedirs(PHOTO_STORAGE)
+                logger.info(f"Создана папка для фото: {PHOTO_STORAGE}")
+            except Exception as e:
+                logger.error(f"Ошибка создания папки для фото: {e}")
         
-        # Ждем, пока задача не будет отменена
-        await update_task
+        # Запускаем основной цикл
+        logger.info("Запуск основного цикла парсера")
+        await check_updates_loop()
+        
+        # Отключаем клиент
+        if client:
+            await client.disconnect()
+            logger.info("Клиент отключен")
+            
     except asyncio.CancelledError:
-        logger.info("Задача парсера отменена")
+        logger.info("Задача отменена")
         if client:
             await client.disconnect()
     except Exception as e:
-        logger.error(f"Неожиданная ошибка в сервисе парсера: {e}")
+        logger.error(f"Неожиданная ошибка в парсере: {e}")
         if client:
             await client.disconnect()
 
+def signal_handler(sig, frame):
+    """Обработчик сигналов для корректного завершения"""
+    global is_running
+    print("Получен сигнал завершения, останавливаем парсер...")
+    is_running = False
+
 def start_parser_service():
-    """
-    Функция для запуска сервиса парсера из внешнего кода.
-    
-    Returns:
-        asyncio.Task: Задача сервиса парсера
-    """
+    """Функция для запуска сервиса из других модулей"""
+    logger.info("Запуск сервиса парсера")
     return asyncio.create_task(run_parser())
 
-# Точка входа при запуске скрипта напрямую
+# Точка входа при запуске напрямую
 if __name__ == "__main__":
+    print("Скрипт parser_service.py запущен напрямую")
+    
     # Настройка логирования
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('parser_debug.log')
+        ]
     )
     
-    # Запускаем парсер
-    asyncio.run(run_parser()) 
+    # Более тихий лог для некоторых модулей
+    logging.getLogger('telethon').setLevel(logging.WARNING)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    
+    print("Запуск парсера...")
+    
+    try:
+        # Настраиваем для Windows
+        if sys.platform.startswith('win'):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        
+        # Регистрируем обработчик сигналов
+        signal.signal(signal.SIGINT, signal_handler)
+        
+        asyncio.run(asyncio.wait_for(run_parser()))
+        print("Парсер завершил работу")
+    except KeyboardInterrupt:
+        print("Прервано пользователем")
+    except Exception as e:
+        print(f"Критическая ошибка: {e}")
+        import traceback
+        traceback.print_exc() 

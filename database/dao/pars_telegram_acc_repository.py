@@ -203,7 +203,8 @@ class ParsingTelegramAccRepository:
                         'id': account.id,
                         'phone_number': account.phone_number,
                         'session_string': account.session_string,
-                        'status': account.status
+                        'status': account.status,
+                        'is_active': account.is_active
                     }
                     for account in accounts
                 ]

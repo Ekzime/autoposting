@@ -54,10 +54,10 @@ class ActivateTargetState(StatesGroup):
 #                    Set New Target Channel                           #
 #                                                                     #
 #######################################################################
-@router.message(Command("set_new_target"))
+@router.message(Command("add_target"))
 async def cmd_set_channel(message: Message, state: FSMContext):
     """
-    Обработчик команды /set_new_target для добавления нового канала.
+    Обработчик команды /add_target для добавления нового канала.
     
     Args:
         message (Message): Объект сообщения от пользователя
@@ -69,7 +69,7 @@ async def cmd_set_channel(message: Message, state: FSMContext):
     3. Запрашивает ID канала или username
     4. Устанавливает состояние ожидания ID канала
     """
-    logger.info(f"Получена команда /set_new_target от пользователя {message.from_user.id}")
+    logger.info(f"Получена команда /add_target от пользователя {message.from_user.id}")
     
     # Отправляем инструкцию пользователю
     await message.answer(text_for_set_new_target, parse_mode="HTML")
@@ -202,10 +202,10 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
 #                    View All Target Channels                         #
 #                                                                     #
 #######################################################################
-@router.message(Command("get_all_targets"))
+@router.message(Command("all_targets"))
 async def cmd_all_channels(message: Message):
     """
-    Обработчик команды /get_all_targets для получения списка всех целевых каналов.
+    Обработчик команды /view_targets для получения списка всех целевых каналов.
     
     Args:
         message (Message): Объект сообщения от пользователя

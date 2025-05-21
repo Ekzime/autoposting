@@ -264,7 +264,7 @@ async def process_source_title(message: Message, state: FSMContext):
             )
             
             # Вызываем обновление парсера
-            trigger_update()
+            await trigger_update()
             logger.info(f"Запущено обновление парсера после добавления источника {source_identifier}")
         else:
             # Если произошла ошибка при добавлении
@@ -657,7 +657,7 @@ async def process_update_source(message: Message, state: FSMContext):
             )
             
             # Вызываем обновление парсера
-            trigger_update()
+            await trigger_update()
             logger.info(f"Запущено обновление парсера после обновления источника {source_id}")
         else:
             await message.answer(
@@ -862,7 +862,7 @@ async def process_delete_confirmation(message: Message, state: FSMContext):
                 )
                 
                 # Вызываем обновление парсера
-                trigger_update()
+                await trigger_update()
                 logger.info(f"Запущено обновление парсера после удаления источника {source_id}")
             else:
                 await message.answer(
