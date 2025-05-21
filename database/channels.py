@@ -23,9 +23,32 @@ def add_channel(channel: Channel) -> None:
         Exception: При ошибках добавления в БД выполняется откат транзакции
     """
     with Session(engine) as connection:
-        if get_channel_by_peer_id(channel.id):
-            print(f"channel {channel.title} already exist in db")
+        # Проверяем существование канала по peer_id
+        existing_by_peer_id = get_channel_by_peer_id(channel.id)
+        if existing_by_peer_id:
+            print(f"Channel {channel.title} already exists in db with peer_id={channel.id}")
             return
+            
+        # Проверяем существование канала по username, если он есть
+        if channel.username:
+            query = select(Channels).where(Channels.username == channel.username)
+            existing_by_username = connection.scalars(query).one_or_none()
+            if existing_by_username:
+                print(f"Channel {channel.title} already exists with username={channel.username}")
+                
+                # Если найден канал с тем же именем, но другим ID, обновляем ID
+                if existing_by_username.peer_id != channel.id:
+                    print(f"Updating channel peer_id from {existing_by_username.peer_id} to {channel.id}")
+                    existing_by_username.peer_id = channel.id
+                    try:
+                        connection.commit()
+                        print(f"Updated channel {channel.title} peer_id")
+                    except Exception as error:
+                        print(f"Error updating channel peer_id: {error}")
+                        connection.rollback()
+                return
+        
+        # Если канал не существует, добавляем его
         try:
             new_channel = Channels(         
                 peer_id = channel.id,
@@ -34,9 +57,9 @@ def add_channel(channel: Channel) -> None:
             )
             connection.add(new_channel)
             connection.commit()
-            print(f"channel {channel.title} added to db")
+            print(f"Channel {channel.title} added to db with peer_id={channel.id}")
         except Exception as error:
-            print(f"got error on channel adding: {error}")
+            print(f"Error adding channel: {error}")
             connection.rollback()
 
 

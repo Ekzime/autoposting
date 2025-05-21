@@ -199,6 +199,7 @@ async def handle_new_message(event):
     
     try:
         message = event.message
+        logger.info(f"New message received from {message.peer_id}, message ID: {message.id}")
         
         # Получаем ID канала
         if isinstance(message.peer_id, PeerChannel):
@@ -211,12 +212,16 @@ async def handle_new_message(event):
             logger.warning(f"Неизвестный тип peer_id: {message.peer_id}")
             return
             
+        logger.info(f"Processing message for channel ID: {channel_id}")
+            
         # Проверяем канал в БД
         channel = await asyncio.to_thread(get_channel_by_peer_id, channel_id)
         if not channel:
             try:
+                logger.info(f"Channel {channel_id} not found in DB, adding...")
                 channel_entity = await client.get_entity(PeerChannel(channel_id))
                 await asyncio.to_thread(add_channel, channel_entity)
+                logger.info(f"Channel {channel_id} added to DB")
             except Exception as e:
                 logger.error(f"Ошибка при добавлении канала: {e}")
                 return
@@ -227,6 +232,7 @@ async def handle_new_message(event):
             try:
                 photo_path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
                 await asyncio.wait_for(message.download_media(photo_path), timeout=20)
+                logger.info(f"Photo saved to {photo_path}")
             except Exception as e:
                 logger.error(f"Ошибка при скачивании фото: {e}")
                 photo_path = None
@@ -249,8 +255,12 @@ async def handle_new_message(event):
         
         TOTAL_HANDLED += 1
         logger.info(f"Обработано сообщение ID: {message.id}, всего: {TOTAL_HANDLED}")
+        if message.text and "биткоин" in message.text.lower() and "максимум" in message.text.lower():
+            logger.info(f"НАЙДЕНО СООБЩЕНИЕ ПРО ИСТОРИЧЕСКИЙ МАКСИМУМ БИТКОИНА: {message.text[:100]}")
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 async def setup_message_handlers(channel_entities):
     """Настраивает обработчики сообщений"""
@@ -260,8 +270,9 @@ async def setup_message_handlers(channel_entities):
         # Очищаем предыдущие обработчики
         try:
             client.remove_event_handler(handle_new_message, events.NewMessage)
-        except:
-            pass
+            logger.info("Удалены предыдущие обработчики сообщений")
+        except Exception as e:
+            logger.info(f"Не удалось удалить обработчики: {e}")
             
         # Получаем ID каналов
         channel_ids = [entity.id for entity in channel_entities if entity]
@@ -270,15 +281,26 @@ async def setup_message_handlers(channel_entities):
             logger.warning("Нет каналов для отслеживания")
             return
             
+        # Более подробная информация о каналах
+        for idx, channel_id in enumerate(channel_ids):
+            logger.info(f"Канал #{idx+1}: ID {channel_id}")
+            
         # Настраиваем обработчик
         client.add_event_handler(
             handle_new_message,
             events.NewMessage(chats=channel_ids)
         )
         
-        logger.info(f"Настроены обработчики для {len(channel_ids)} каналов")
+        # Проверка что обработчик добавлен
+        handlers = client.list_event_handlers()
+        logger.info(f"Текущие обработчики: {handlers}")
+        
+        logger.info(f"Настроены обработчики для {len(channel_ids)} каналов: {channel_ids}")
+        
     except Exception as e:
         logger.error(f"Ошибка при настройке обработчиков: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
 
 async def check_updates_loop():
     """Основной цикл проверки обновлений"""
