@@ -280,19 +280,9 @@ async def check_updates_loop():
     
     logger.info("Запуск основного цикла проверки")
     
-    # Счетчик для отладки
-    attempt_count = 0
-    max_attempts = 3
-    
     while is_running:
         try:
-            attempt_count += 1
-            logger.info(f"Начало итерации #{attempt_count}")
-            
-            # Для отладки
-            if attempt_count > max_attempts:
-                logger.info(f"Достигнуто максимальное число попыток ({max_attempts}), завершаем...")
-                break
+            logger.info("Начало итерации цикла обновлений")
                 
             # Получаем активный аккаунт
             account_data = await get_active_account_from_db()
@@ -425,7 +415,7 @@ if __name__ == "__main__":
         # Регистрируем обработчик сигналов
         signal.signal(signal.SIGINT, signal_handler)
         
-        asyncio.run(asyncio.wait_for(run_parser()))
+        asyncio.run(run_parser())
         print("Парсер завершил работу")
     except KeyboardInterrupt:
         print("Прервано пользователем")
