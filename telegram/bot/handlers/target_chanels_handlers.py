@@ -20,6 +20,9 @@ from telegram.bot.texts.text_for_messages import (
 # Библиотеки для работы с базой данных
 from database.repositories import posting_target_repository as pt_repo
 
+# Импорт функции для обновления настроек постинга
+from telegram.bot.utils.trigger_utils import trigger_posting_settings_update
+
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,11 @@ class DeleteTargetState(StatesGroup):
 class ActivateTargetState(StatesGroup):
     """Состояния для процесса активации целевого канала"""
     waiting_for_target_id_str = State()
+
+class ToggleTargetState(StatesGroup):
+    """Состояния для процесса включения/выключения целевого канала"""
+    waiting_for_target_id_str = State()
+    waiting_for_status = State()
 
 
 #######################################################################
@@ -188,6 +196,10 @@ async def cmd_process_channel_title(message: Message, state: FSMContext):
         if result:
             await message.answer(f"Канал <b>{title}</b> ({target_id}) успешно установлен как целевой для публикации.", parse_mode="HTML")
             logger.info(f"Канал {title} ({target_id}) успешно установлен")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info("Отправлен сигнал обновления настроек постинга")
         else:
             await message.answer("Не удалось установить канал. Попробуйте позже.")
             
@@ -310,68 +322,66 @@ async def cmd_deactivate_target(message: Message, state: FSMContext):
 @router.message(DeactivateTargetState.waiting_for_target_id_str)
 async def process_deactivate_target(message: Message, state: FSMContext):
     """
-    Обработчик для получения ID или @username канала для деактивации.
-
+    Обработчик для деактивации целевого канала.
+    
     Args:
-        message (Message): Объект сообщения от пользователя
-        state (FSMContext): Объект состояния FSM для хранения данных между этапами
-    """
-    try:
-        # Проверяем, что введен корректный ID
-        if not message.text.isdigit():
-            await message.answer(
-                "⚠️ <b>Ошибка ввода</b>\n\n"
-                "ID канала должен быть числом. Пожалуйста, введите корректный ID.",
-                parse_mode="HTML"
-            )
-            return
-            
-        target_id = int(message.text.strip())
+        message (Message): Объект сообщения от пользователя с ID канала для деактивации
+        state (FSMContext): Контекст состояния FSM
         
+    Действия:
+    1. Проверяет корректность введенного ID канала
+    2. Деактивирует канал в БД
+    3. Отправляет пользователю результат операции
+    4. Очищает состояние FSM
+    """
+    target_id = message.text.strip()
+    
+    try:
+        # Получаем информацию о каналах
         def _deactivate_sync():
             # Получаем сначала информацию о канале, чтобы узнать его chat_id
             def _get_all_targets_sync():
                 return pt_repo.get_all_target_channels()
                 
             all_targets = _get_all_targets_sync()
-            target_chat_id = None
+            target_info = None
             
-            # Находим chat_id по ID канала
+            # Проверяем, существует ли канал с таким ID
             for target in all_targets:
-                if target['id'] == target_id:
-                    target_chat_id = target['target_chat_id']
+                if str(target['id']) == target_id:
+                    target_info = target
                     break
-            
-            if not target_chat_id:
-                return False
+                    
+            if not target_info:
+                return False, f"Не найден канал с ID {target_id}"
                 
-            # Деактивируем канал по его chat_id
-            return pt_repo.deactivate_target_by_id(target_chat_id)
-
-        # Выполняем деактивацию канала
-        success = await asyncio.to_thread(_deactivate_sync)
+            # Деактивируем канал
+            success = pt_repo.deactivate_target_by_id(target_info['target_chat_id'])
+            
+            if not success:
+                return False, f"Не удалось деактивировать канал {target_info['target_title']}"
+                
+            return True, target_info
+        
+        # Выполняем синхронную функцию через asyncio.to_thread
+        success, result = await asyncio.to_thread(_deactivate_sync)
         
         if success:
-            await message.answer(
-                f"✅ <b>Канал успешно деактивирован</b>\n\n"
-                f"Целевой канал с ID {target_id} больше не является активным.",
-                parse_mode="HTML"
-            )
+            await message.answer(f"Канал <b>{result['target_title']}</b> успешно деактивирован.", parse_mode="HTML")
+            logger.info(f"Канал {result['target_title']} ({result['target_chat_id']}) деактивирован")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info("Отправлен сигнал обновления настроек постинга после деактивации канала")
         else:
-            await message.answer(
-                f"❌ <b>Ошибка деактивации</b>\n\n"
-                f"Канал с ID {target_id} не найден или уже деактивирован.",
-                parse_mode="HTML"
-            )
+            await message.answer(result)
+            
     except Exception as e:
+        await message.answer(f"Произошла ошибка при деактивации канала: {str(e)}")
         logger.error(f"Ошибка при деактивации канала: {e}")
-        await message.answer(
-            "❌ <b>Произошла ошибка при деактивации канала</b>",
-            parse_mode="HTML"
-        )
-    
-    # Очищаем состояние FSM
-    await state.clear()
+        
+    finally:
+        await state.clear()
 
 #######################################################################
 #                                                                     #
@@ -423,70 +433,60 @@ async def cmd_delete_target(message:Message, state:FSMContext):
 @router.message(DeleteTargetState.waiting_for_target_id_str)
 async def process_delete_target(message:Message, state:FSMContext):
     """
-    Обработчик для получения ID канала и его удаления.
+    Обработчик для удаления целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя с ID канала для удаления
+        state (FSMContext): Контекст состояния FSM
     """
+    target_id = message.text.strip()
+    
     try:
-        # Проверяем, что введен корректный ID
-        if not message.text.isdigit():
-            await message.answer(
-                "⚠️ <b>Ошибка ввода</b>\n\n"
-                "ID канала должен быть числом. Пожалуйста, введите корректный ID.",
-                parse_mode="HTML"
-            )
-            return
-            
-        target_id = int(message.text.strip())
-        
+        # Получаем информацию о каналах
         def _delete_sync():
             # Получаем сначала информацию о канале, чтобы узнать его chat_id
             def _get_all_targets_sync():
                 return pt_repo.get_all_target_channels()
                 
             all_targets = _get_all_targets_sync()
-            target_chat_id = None
-            target_title = None
+            target_info = None
             
-            # Находим chat_id по ID канала
+            # Проверяем, существует ли канал с таким ID
             for target in all_targets:
-                if target['id'] == target_id:
-                    target_chat_id = target['target_chat_id']
-                    target_title = target['target_title']
+                if str(target['id']) == target_id:
+                    target_info = target
                     break
-            
-            if not target_chat_id:
-                return False, None
+                    
+            if not target_info:
+                return False, f"Не найден канал с ID {target_id}"
                 
-            # Удаляем канал по его chat_id
-            success = pt_repo.delete_target_channel(target_chat_id)
-            return success, target_title
-
-        # Выполняем удаление канала
-        result = await asyncio.to_thread(_delete_sync)
-        success, target_title = result
+            # Удаляем канал
+            success = pt_repo.delete_target_channel(target_info['target_chat_id'])
+            
+            if not success:
+                return False, f"Не удалось удалить канал {target_info['target_title']}"
+                
+            return True, target_info
+        
+        # Выполняем синхронную функцию через asyncio.to_thread
+        success, result = await asyncio.to_thread(_delete_sync)
         
         if success:
-            await message.answer(
-                f"✅ <b>Канал успешно удален</b>\n\n"
-                f"Целевой канал с ID {target_id}"
-                + (f" ({target_title})" if target_title else "")
-                + " был удален из базы данных.",
-                parse_mode="HTML"
-            )
+            await message.answer(f"Канал <b>{result['target_title']}</b> успешно удален.", parse_mode="HTML")
+            logger.info(f"Канал {result['target_title']} ({result['target_chat_id']}) удален")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info("Отправлен сигнал обновления настроек постинга после удаления канала")
         else:
-            await message.answer(
-                f"❌ <b>Ошибка удаления</b>\n\n"
-                f"Канал с ID {target_id} не найден или не может быть удален.",
-                parse_mode="HTML"
-            )
+            await message.answer(result)
+            
     except Exception as e:
+        await message.answer(f"Произошла ошибка при удалении канала: {str(e)}")
         logger.error(f"Ошибка при удалении канала: {e}")
-        await message.answer(
-            "❌ <b>Произошла ошибка при удалении канала</b>",
-            parse_mode="HTML"
-        )
-    
-    # Очищаем состояние FSM
-    await state.clear()
+        
+    finally:
+        await state.clear()
 
 #######################################################################
 #                                                                     #
@@ -534,71 +534,216 @@ async def cmd_activate_target(message:Message, state:FSMContext):
 @router.message(ActivateTargetState.waiting_for_target_id_str)
 async def process_activate_target(message:Message, state:FSMContext):
     """
-    Обработчик для получения ID канала и его активации.
+    Обработчик для активации целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя с ID канала для активации
+        state (FSMContext): Контекст состояния FSM
     """
+    target_id = message.text.strip()
+    
     try:
-        # Проверяем, что введен корректный ID
-        if not message.text.isdigit():
-            await message.answer(
-                "⚠️ <b>Ошибка ввода</b>\n\n"
-                "ID канала должен быть числом. Пожалуйста, введите корректный ID.",
-                parse_mode="HTML"
-            )
-            return
-            
-        target_id = int(message.text.strip())
-        
+        # Получаем информацию о каналах
         def _activate_sync():
             # Получаем сначала информацию о канале, чтобы узнать его chat_id
             def _get_all_targets_sync():
                 return pt_repo.get_all_target_channels()
                 
             all_targets = _get_all_targets_sync()
-            target_chat_id = None
-            target_title = None
+            target_info = None
             
-            # Находим chat_id по ID канала
+            # Проверяем, существует ли канал с таким ID
             for target in all_targets:
-                if target['id'] == target_id:
-                    target_chat_id = target['target_chat_id']
-                    target_title = target['target_title']
+                if str(target['id']) == target_id:
+                    target_info = target
                     break
-            
-            if not target_chat_id:
-                return False, None
+                    
+            if not target_info:
+                return False, f"Не найден канал с ID {target_id}"
                 
-            # Активируем канал по его chat_id
-            success = pt_repo.activate_target_by_id(target_chat_id)
-            return success, target_title
+            # Активируем канал
+            success = pt_repo.activate_target_by_id(target_info['target_chat_id'])
+            
+            if not success:
+                return False, f"Не удалось активировать канал {target_info['target_title']}"
+                
+            return True, target_info
+        
+        # Выполняем синхронную функцию через asyncio.to_thread
+        success, result = await asyncio.to_thread(_activate_sync)
+        
+        if success:
+            await message.answer(f"Канал <b>{result['target_title']}</b> успешно активирован.", parse_mode="HTML")
+            logger.info(f"Канал {result['target_title']} ({result['target_chat_id']}) активирован")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info("Отправлен сигнал обновления настроек постинга после активации канала")
+        else:
+            await message.answer(result)
+            
+    except Exception as e:
+        await message.answer(f"Произошла ошибка при активации канала: {str(e)}")
+        logger.error(f"Ошибка при активации канала: {e}")
+        
+    finally:
+        await state.clear()
 
-        # Выполняем активацию канала
-        result = await asyncio.to_thread(_activate_sync)
-        success, target_title = result
+#######################################################################
+#                                                                     #
+#                    Toggle Target Channel                            #
+#                                                                     #
+#######################################################################
+@router.message(Command("toggle_target"))
+async def cmd_toggle_target(message: Message, state: FSMContext):
+    """
+    Обработчик команды /toggle_target для включения/выключения целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Получает список всех целевых каналов из БД
+    2. Если список пустой - отправляет сообщение об отсутствии каналов
+    3. Формирует сообщение с запросом выбора канала для переключения статуса
+    4. Устанавливает состояние ожидания ID канала
+    """
+    def _get_all_targets_sync():
+        return pt_repo.get_all_target_channels()
+    
+    all_target_channels = await asyncio.to_thread(_get_all_targets_sync)
+    if not all_target_channels:
+        await message.answer("Целевых каналов нет. Используйте /add_target, чтобы добавить канал.")
+        return
+    
+    channels_list = ["<b>Выберите канал для включения/выключения:</b>"]
+    for channel in all_target_channels:
+        status = "✅ Активен" if channel['is_active'] else "❌ Неактивен"
+        channels_list.append(f"ID: <code>{channel['id']}</code> - {channel['target_title']} ({status})")
+    
+    await message.answer("\n".join(channels_list), parse_mode="HTML")
+    await message.answer("Введите ID канала для переключения статуса:")
+    await state.set_state(ToggleTargetState.waiting_for_target_id_str)
+
+
+@router.message(ToggleTargetState.waiting_for_target_id_str)
+async def process_toggle_target_id(message: Message, state: FSMContext):
+    """
+    Обработчик для получения ID канала для переключения статуса.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Проверяет корректность введенного ID канала
+    2. Сохраняет ID канала в состоянии FSM
+    3. Запрашивает новый статус канала (включить/выключить)
+    """
+    target_id = message.text.strip()
+    
+    if not target_id.isdigit():
+        await message.answer("ID канала должен быть числом. Пожалуйста, введите корректный ID:")
+        return
+    
+    # Проверяем существование канала
+    def _check_target_exists():
+        all_targets = pt_repo.get_all_target_channels()
+        for target in all_targets:
+            if str(target['id']) == target_id:
+                return True, target
+        return False, None
+    
+    exists, target_info = await asyncio.to_thread(_check_target_exists)
+    
+    if not exists:
+        await message.answer(f"Канал с ID {target_id} не найден. Пожалуйста, введите корректный ID:")
+        return
+    
+    # Сохраняем информацию о канале
+    await state.update_data(target_id=target_id, target_info=target_info)
+    
+    current_status = "активен" if target_info['is_active'] else "неактивен"
+    new_status = "деактивировать" if target_info['is_active'] else "активировать"
+    
+    await message.answer(
+        f"Канал <b>{target_info['target_title']}</b> сейчас {current_status}.\n"
+        f"Хотите {new_status} этот канал? (да/нет)",
+        parse_mode="HTML"
+    )
+    await state.set_state(ToggleTargetState.waiting_for_status)
+
+
+@router.message(ToggleTargetState.waiting_for_status)
+async def process_toggle_target_status(message: Message, state: FSMContext):
+    """
+    Обработчик для получения подтверждения изменения статуса канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Проверяет ответ пользователя (да/нет)
+    2. Если ответ положительный - переключает статус канала
+    3. Отправляет результат операции
+    4. Очищает состояние FSM
+    """
+    response = message.text.strip().lower()
+    
+    if response not in ["да", "нет", "yes", "no"]:
+        await message.answer("Пожалуйста, ответьте 'да' или 'нет':")
+        return
+    
+    # Если ответ отрицательный, прекращаем операцию
+    if response in ["нет", "no"]:
+        await message.answer("Операция отменена.")
+        await state.clear()
+        return
+    
+    # Получаем данные из состояния
+    data = await state.get_data()
+    target_id = data.get("target_id")
+    target_info = data.get("target_info")
+    
+    if not target_id or not target_info:
+        await message.answer("Произошла ошибка: данные о канале потеряны. Пожалуйста, начните заново.")
+        await state.clear()
+        return
+    
+    # Определяем новый статус (инвертируем текущий)
+    new_status = not target_info['is_active']
+    status_text = "активирован" if new_status else "деактивирован"
+    
+    def _toggle_status():
+        return pt_repo.toggle_target_active_status(
+            target_info['target_chat_id'], 
+            new_status
+        )
+    
+    try:
+        success = await asyncio.to_thread(_toggle_status)
         
         if success:
             await message.answer(
-                f"✅ <b>Канал успешно активирован</b>\n\n"
-                f"Целевой канал с ID {target_id}"
-                + (f" ({target_title})" if target_title else "")
-                + " установлен как активный.\n"
-                f"Все остальные каналы деактивированы.",
+                f"Канал <b>{target_info['target_title']}</b> успешно {status_text}.",
                 parse_mode="HTML"
             )
+            logger.info(f"Канал {target_info['target_title']} ({target_info['target_chat_id']}) {status_text}")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info(f"Отправлен сигнал обновления настроек постинга после изменения статуса канала")
         else:
-            await message.answer(
-                f"❌ <b>Ошибка активации</b>\n\n"
-                f"Канал с ID {target_id} не найден или не может быть активирован.",
-                parse_mode="HTML"
-            )
-    except Exception as e:
-        logger.error(f"Ошибка при активации канала: {e}")
-        await message.answer(
-            "❌ <b>Произошла ошибка при активации канала</b>",
-            parse_mode="HTML"
-        )
+            await message.answer(f"Не удалось изменить статус канала {target_info['target_title']}.")
     
-    # Очищаем состояние FSM
-    await state.clear()
+    except Exception as e:
+        await message.answer(f"Произошла ошибка при изменении статуса канала: {str(e)}")
+        logger.error(f"Ошибка при изменении статуса канала: {e}")
+    
+    finally:
+        await state.clear()
 
 
 # TODO:

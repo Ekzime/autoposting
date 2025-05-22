@@ -50,11 +50,23 @@ class ParsingSourceRepository:
                 - None в случае ошибки
             
         Примечание:
+            - Автоматически форматирует юзернеймы, добавляя префикс @ если его нет
             - Проверяет существование источника с таким идентификатором для данной цели
             - Проверяет существование целевого канала
             - Создает новую запись в БД, если все проверки пройдены
         """
         try:
+            # Форматируем source_identifier
+            # Если это не число и не начинается с @, добавляем @
+            try:
+                int(source_identifier)  # Пробуем преобразовать в число
+                # Если успешно - это ID канала, оставляем как есть
+            except ValueError:
+                # Если это не число и не начинается с @, добавляем @
+                if not source_identifier.startswith('@'):
+                    source_identifier = f"@{source_identifier}"
+                    logging.info(f"Идентификатор отформатирован с добавлением @ префикса: {source_identifier}")
+            
             with session_scope() as db:
                 # Проверяем, существует ли уже такой источник для данной цели
                 existing_source = db.execute(select(ParsingSourceChannel).filter_by(source_identifier=source_identifier, 
@@ -264,6 +276,17 @@ class ParsingSourceRepository:
             bool: True в случае успешного обновления, False если источник не найден или произошла ошибка
         """
         try:
+            # Форматируем новый идентификатор, если он передан
+            if new_source_identifier:
+                try:
+                    int(new_source_identifier)  # Пробуем преобразовать в число
+                    # Если успешно - это ID канала, оставляем как есть
+                except ValueError:
+                    # Если это не число и не начинается с @, добавляем @
+                    if not new_source_identifier.startswith('@'):
+                        new_source_identifier = f"@{new_source_identifier}"
+                        logging.info(f"Новый идентификатор отформатирован с добавлением @ префикса: {new_source_identifier}")
+            
             with session_scope() as db:
                 # Получаем источник по ID
                 source = db.get(ParsingSourceChannel, source_db_id)

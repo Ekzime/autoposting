@@ -16,6 +16,12 @@ from database.models import Messages, NewsStatus, engine, SessionLocal, PostingT
 # Импортируем централизованные настройки
 from config import settings
 
+# Импортируем репозиторий для работы с целевыми каналами
+from database.repositories import posting_target_repository
+
+# Импортируем общие события из trigger_utils
+from telegram.bot.utils.trigger_utils import posting_settings_update_event
+
 # Настройка базовой конфигурации логгера
 logging.basicConfig(
     level=logging.INFO,
@@ -31,6 +37,9 @@ if not AI_SERVICE_URL: logging.warning("AI_API_URL не задан!")
 if not TELEGRAM_BOT_TOKEN: logging.warning("TELEGRAM_BOT_TOKEN не задан! Постинг не будет работать.")
 
 logging.info("posting_worker.py загружен")
+
+# Глобальные переменные
+last_targets_check = datetime.now()  # Время последней проверки целевых каналов
 
 async def post_message_to_telegram(
     bot: Bot | None, 
@@ -127,45 +136,118 @@ async def get_messages_for_ai_processing(limit: int = 5) -> list[Messages]:
     return messages
 
 
-async def get_messages_ready_for_posting(limit: int = 5) -> list[Messages]:
+async def get_messages_ready_for_posting(limit: int = 5, target_channel_id: str = None) -> list[Messages]:
     """
-    Получает сообщения из базы данных, готовые для публикации в Telegram канал.
+    Получает сообщения из базы данных, готовые для публикации в конкретный Telegram канал.
     
     Args:
         limit (int): Максимальное количество сообщений для получения. По умолчанию 5.
+        target_channel_id (str): ID целевого канала для постинга. Если указан, 
+                                будут выбраны только сообщения из источников, 
+                                привязанных к этому каналу.
         
     Returns:
         list[Messages]: Список объектов Messages, готовых для публикации.
         
     Действия:
-    1. Получает сообщения со статусом AI_PROCESSED из базы данных
-    2. Проверяет наличие обработанного AI текста в сообщениях
-    3. Сортирует по дате (старые в начале)
-    4. Ограничивает количество записей параметром limit
+    1. Если указан target_channel_id, получает список источников, привязанных к нему
+    2. Получает сообщения со статусом AI_PROCESSED из базы данных
+    3. Проверяет наличие обработанного AI текста в сообщениях
+    4. Фильтрует сообщения по источникам, если указан target_channel_id
+    5. Сортирует по дате (старые в начале)
+    6. Ограничивает количество записей параметром limit
     """
     
-    logging.info("Получение сообщений для постинга (статус AI_PROCESSED)...")
+    logging.info(f"Получение сообщений для постинга (статус AI_PROCESSED) для канала {target_channel_id or 'все каналы'}...")
     
     def _get_sync():
         with SessionLocal() as session:
-            query = (
+            # Базовый запрос для получения обработанных сообщений
+            base_query = (
                 select(Messages)
                 .where(
                     Messages.status == NewsStatus.AI_PROCESSED,
                     Messages.ai_processed_text != None,
                     Messages.ai_processed_text != ""
                 )
+            )
+            
+            # Если указан целевой канал, фильтруем по источникам
+            if target_channel_id:
+                # Получаем целевой канал
+                target = session.execute(
+                    select(PostingTarget).where(PostingTarget.target_chat_id == target_channel_id)
+                ).scalar_one_or_none()
+                
+                if not target:
+                    logging.warning(f"Целевой канал {target_channel_id} не найден в БД")
+                    return []
+                
+                # Получаем ID источников, привязанных к этому каналу
+                from database.models import ParsingSourceChannel, Channels
+                
+                # Получаем записи источников парсинга для данного целевого канала
+                parsing_sources = session.execute(
+                    select(ParsingSourceChannel).where(
+                        ParsingSourceChannel.posting_target_id == target.id
+                    )
+                ).scalars().all()
+                
+                if not parsing_sources:
+                    logging.warning(f"Нет источников парсинга для канала {target_channel_id}")
+                    return []
+                
+                # Получаем идентификаторы источников
+                source_identifiers = [ps.source_identifier for ps in parsing_sources]
+                
+                # Получаем каналы по их идентификаторам (username или ID)
+                source_channels = []
+                for identifier in source_identifiers:
+                    # Пробуем сначала найти по username
+                    if identifier.startswith('@'):
+                        channel = session.execute(
+                            select(Channels).where(Channels.username == identifier[1:])
+                        ).scalar_one_or_none()
+                    else:
+                        # Пробуем найти по peer_id (предполагая, что identifier - это число)
+                        try:
+                            peer_id = int(identifier)
+                            channel = session.execute(
+                                select(Channels).where(Channels.peer_id == peer_id)
+                            ).scalar_one_or_none()
+                        except ValueError:
+                            channel = None
+                    
+                    if channel:
+                        source_channels.append(channel)
+                
+                if not source_channels:
+                    logging.warning(f"Нет каналов в БД, соответствующих источникам для {target_channel_id}")
+                    return []
+                
+                # Получаем peer_id каналов-источников
+                source_peer_ids = [ch.peer_id for ch in source_channels]
+                
+                logging.info(f"Фильтрация по источникам {source_peer_ids} для канала {target_channel_id}")
+                
+                # Фильтруем сообщения только из этих источников
+                base_query = base_query.where(Messages.channel_id.in_(source_peer_ids))
+            
+            # Дополняем запрос сортировкой и лимитом
+            query = (
+                base_query
                 .order_by(Messages.date.asc())
                 .limit(limit)
             )
+            
             return session.execute(query).scalars().all()
             
     messages = await asyncio.to_thread(_get_sync)
     
     if messages:
-        logging.info(f"Найдено {len(messages)} сообщений для постинга.")
+        logging.info(f"Найдено {len(messages)} сообщений для постинга в канал {target_channel_id or 'все каналы'}.")
     else:
-        logging.info("Нет сообщений для постинга.")
+        logging.info(f"Нет сообщений для постинга в канал {target_channel_id or 'все каналы'}.")
         
     return messages
 
@@ -326,7 +408,7 @@ async def main_logic(bot_for_posting: Bot | None):
     Действия:
     1. Запускает обработку сообщений через AI
     2. Делает паузу между этапами
-    3. Публикует обработанные сообщения в Telegram канал
+    3. Публикует обработанные сообщения в Telegram каналы
        (если предоставлен бот и каналы настроены в базе данных)
     """
     
@@ -345,19 +427,40 @@ async def main_logic(bot_for_posting: Bot | None):
         )
         return
     
-    # Получаем активный целевой канал из базы данных
-    def _get_active_target_sync():
-        with SessionLocal() as session:
-            query = select(PostingTarget).where(PostingTarget.is_active == True)
-            return session.execute(query).scalars().first()
+    # Получаем все активные целевые каналы из базы данных
+    active_targets = await asyncio.to_thread(posting_target_repository.get_all_active_target_channels)
     
-    active_target = await asyncio.to_thread(_get_active_target_sync)
-    
-    if not active_target:
-        logging.info("Нет активного целевого канала в базе данных. Постинг пропускается.")
+    if not active_targets:
+        logging.info("Нет активных целевых каналов в базе данных. Постинг пропускается.")
         return
     
-    await _process_posting_messages(bot_for_posting, active_target.target_chat_id)
+    logging.info(f"Найдено {len(active_targets)} активных целевых каналов для постинга.")
+    
+    # Обрабатываем постинг для каждого канала отдельно
+    for target in active_targets:
+        target_id = target["target_chat_id"]
+        logging.info(f"Обработка постинга для канала {target_id}")
+        
+        # Получаем сообщения для конкретного канала
+        messages = await get_messages_ready_for_posting(limit=2, target_channel_id=target_id)
+        
+        if not messages:
+            logging.info(f"Нет сообщений для постинга в канал {target_id}.")
+            continue
+            
+        logging.info(f"Найдено {len(messages)} сообщений для постинга в канал {target_id}.")
+        
+        # Создаем список с одним текущим каналом
+        channel = [{
+            "target_chat_id": target_id,
+            "target_title": target.get("target_title", "Без названия")
+        }]
+        
+        # Отправляем сообщения в этот канал
+        await _process_posting_messages_multi_channel(bot_for_posting, channel, messages)
+        
+        # Небольшая пауза между обработкой разных каналов
+        await asyncio.sleep(1)
 
 
 async def run_periodic_tasks(bot_for_posting: Bot | None):
@@ -370,15 +473,39 @@ async def run_periodic_tasks(bot_for_posting: Bot | None):
             
     Действия:
     1. Запускает бесконечный цикл выполнения основной логики
-    2. Делает паузу 10 секунд между итерациями
-    3. Логирует каждую итерацию
+    2. Периодически проверяет обновления в настройках каналов
+    3. Делает паузу между итерациями
+    4. Логирует каждую итерацию
     """
+    
+    global last_targets_check
     
     logging.info("Запуск run_periodic_tasks в posting_worker...")
     while True:
         await main_logic(bot_for_posting)
+        
+        # Проверяем, прошло ли 30 секунд с последней проверки целевых каналов
+        # или было вызвано событие обновления
+        current_time = datetime.now()
+        if posting_settings_update_event.is_set() or (current_time - last_targets_check).total_seconds() > 30:
+            if posting_settings_update_event.is_set():
+                logging.info("Получено событие обновления настроек целевых каналов.")
+                posting_settings_update_event.clear()
+            else:
+                logging.info("Плановая проверка обновлений в настройках целевых каналов...")
+                
+            last_targets_check = current_time
+            # Здесь нет необходимости в дополнительных действиях, 
+            # так как main_logic получает актуальные данные при каждом вызове
+        
         logging.info("posting_worker: Следующий цикл через 10 секунд...")
-        await asyncio.sleep(10)
+        try:
+            # Ждем событие обновления с таймаутом
+            await asyncio.wait_for(posting_settings_update_event.wait(), timeout=10)
+            logging.info("Получено событие обновления, начинаем новую итерацию")
+        except asyncio.TimeoutError:
+            # Тайм-аут истек, продолжаем штатно
+            pass
 
 
 # Вспомогательные функции
@@ -460,55 +587,87 @@ async def _process_ai_messages():
         await asyncio.sleep(1)
 
 
-async def _process_posting_messages(bot: Bot, channel_id: str):
+async def _process_posting_messages_multi_channel(bot: Bot, target_channels: list[dict], messages: list[Messages]):
     """
-    Обрабатывает сообщения для постинга в Telegram канал.
+    Обрабатывает сообщения для постинга в несколько Telegram каналов.
     
     Args:
         bot (Bot): Экземпляр бота Telegram для отправки сообщений
-        channel_id (str): Идентификатор канала для отправки
+        target_channels (list[dict]): Список словарей с информацией о целевых каналах
+        messages (list[Messages]): Список сообщений для постинга
         
     Действия:
-    1. Получает до 2-х сообщений из БД, готовых к постингу
-    2. Для каждого сообщения:
+    1. Для каждого сообщения:
        - Проверяет наличие обработанного AI текста
-       - Если текст есть - отправляет в Telegram канал
+       - Если текст есть - отправляет во все Telegram каналы из списка
        - Обновляет статус сообщения в БД (POSTED или ERROR_POSTING)
-    3. Делает паузу 1 секунду между отправкой сообщений
+    2. Делает паузу 1 секунду между отправкой сообщений
     
     Returns:
         None
-        
-    Raises:
-        Ошибки пробрасываются наверх для обработки в вызывающем коде
     """
-    messages = await get_messages_ready_for_posting(limit=2)
-    
     if not messages:
-        logging.info("Нет сообщений, готовых к постингу, в этом цикле.")
+        logging.info("Нет сообщений для постинга в мультиканальном режиме.")
         return
-        
-    logging.info(f"Постинг для {len(messages)} сообщений в канал {channel_id}...")
+    
+    if not target_channels:
+        logging.info("Нет целевых каналов для постинга.")
+        return
+    
+    channels_str = ", ".join([f"{ch.get('target_title', 'Без названия')}({ch['target_chat_id']})" for ch in target_channels])
+    logging.info(f"Постинг {len(messages)} сообщений в каналы: {channels_str}")
     
     for msg in messages:
         if not msg.ai_processed_text:
             logging.warning(
-                f"Сообщение ID {msg.id} (для постинга) не имеет "
+                f"Сообщение ID {msg.id} (для мультиканального постинга) не имеет "
                 "обработанного текста. Пропуск."
             )
             continue
+        
+        # Отправляем сообщение во все каналы из списка
+        overall_success = True  # Предполагаем успех для всех каналов
+        posting_results = []
+        
+        for channel in target_channels:
+            channel_id = channel["target_chat_id"]
+            channel_title = channel.get("target_title", "Без названия")
             
-        success = await post_message_to_telegram(
-            bot,
-            channel_id,
-            msg.ai_processed_text,
-            msg.id
-        )
+            success = await post_message_to_telegram(
+                bot,
+                channel_id,
+                msg.ai_processed_text,
+                msg.id
+            )
+            
+            posting_results.append({
+                "channel_id": channel_id,
+                "channel_title": channel_title,
+                "success": success
+            })
+            
+            if not success:
+                overall_success = False
+            
+            # Небольшая пауза между отправками в разные каналы
+            await asyncio.sleep(0.5)
         
-        status = NewsStatus.POSTED if success else NewsStatus.ERROR_POSTING
+        # Определяем итоговый статус сообщения
+        status = NewsStatus.POSTED if overall_success else NewsStatus.ERROR_POSTING
+        
+        # Формируем детальный отчет о постинге
+        result_details = ", ".join([
+            f"{r['channel_title']}({r['channel_id']}): {'OK' if r['success'] else 'ОШИБКА'}"
+            for r in posting_results
+        ])
+        
+        logging.info(f"ID {msg.id}: Результаты постинга: {result_details}")
+        
+        # Обновляем статус сообщения в БД
         await _update_message_status(msg.id, status)
-        logging.info(f"ID {msg.id}: Статус после постинга в БД: {status.value}")
+        logging.info(f"ID {msg.id}: Финальный статус в БД: {status.value}")
         
+        # Пауза перед обработкой следующего сообщения
         await asyncio.sleep(1)
 
 
@@ -555,6 +714,44 @@ def close_bot_session():
             logging.error(f"Ошибка закрытия сессии: {e}")
             
     logging.info("Работа posting_worker.py завершена")
+
+
+async def _process_posting_messages(bot: Bot, channel_id: str):
+    """
+    Обрабатывает сообщения для постинга в Telegram канал (для обратной совместимости).
+    
+    Args:
+        bot (Bot): Экземпляр бота Telegram для отправки сообщений
+        channel_id (str): Идентификатор канала для отправки
+        
+    Действия:
+        Делегирует работу функции _process_posting_messages_multi_channel
+        для обеспечения обратной совместимости.
+    """
+    # Получаем сообщения специфично для этого канала
+    messages = await get_messages_ready_for_posting(limit=2, target_channel_id=channel_id)
+    
+    if not messages:
+        logging.info(f"Нет сообщений, готовых к постингу в канал {channel_id}, в этом цикле.")
+        return
+    
+    # Создаем список с одним каналом
+    single_channel = [{
+        "target_chat_id": channel_id,
+        "target_title": f"Канал {channel_id}"
+    }]
+    
+    # Делегируем работу мультиканальной функции
+    await _process_posting_messages_multi_channel(bot, single_channel, messages)
+
+
+def trigger_update():
+    """
+    Вызывает немедленное обновление списка целевых каналов для постинга.
+    Эта функция используется для обновления настроек постинга из других модулей.
+    """
+    posting_settings_update_event.set()
+    logging.info("Запущено обновление настроек постинга из posting_worker")
 
 
 if __name__ == "__main__":

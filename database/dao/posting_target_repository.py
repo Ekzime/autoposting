@@ -239,4 +239,108 @@ class PostingTargetRepository:
                 logging.error(f"Error in activate_target_by_id: {e}")
                 return False
 
+    def get_all_active_target_channels(self) -> List[Dict[str, Any]]:
+        """
+        Получает список всех активных целей для постинга.
+        
+        Returns:
+            List[Dict[str, Any]]: Список словарей с информацией об активных целях
+            
+        Действия:
+            1. Получает все записи из таблицы PostingTarget с флагом is_active=True
+            2. Преобразует их в список словарей
+        """
+        with session_scope() as db:
+            try:
+                targets = db.execute(
+                    select(PostingTarget).filter_by(is_active=True)
+                ).scalars().all()
+                
+                if not targets:
+                    return []
+                    
+                return [
+                    {
+                        "id": t.id,
+                        "target_chat_id": t.target_chat_id,
+                        "target_title": t.target_title,
+                        "is_active": t.is_active,
+                        "added_at": t.added_at.isoformat() if t.added_at else None
+                    }
+                    for t in targets
+                ]
+            except Exception as e:
+                logging.error(f"Error in get_all_active_target_channels: {e}")
+                return []
+
+    def toggle_target_active_status(self, target_chat_id_str: str, active_status: bool) -> bool:
+        """
+        Активирует или деактивирует цель для постинга без влияния на другие цели.
+        
+        Args:
+            target_chat_id_str (str): ID чата цели
+            active_status (bool): Новый статус активности
+            
+        Returns:
+            bool: True в случае успеха, False если цель не найдена или произошла ошибка
+        """
+        with session_scope() as db:
+            try:
+                target = db.execute(
+                    select(PostingTarget).where(PostingTarget.target_chat_id == target_chat_id_str)
+                ).scalar_one_or_none()
+                
+                if not target:
+                    return False
+                    
+                target.is_active = active_status
+                return True
+            except Exception as e:
+                logging.error(f"Error in toggle_target_active_status: {e}")
+                return False
+                
+    def add_or_update_target(self, target_chat_id_str: str, target_title: str | None, is_active: bool = True) -> PostingTarget | None:
+        """
+        Добавляет новую или обновляет существующую цель для постинга.
+        
+        Args:
+            target_chat_id_str (str): ID чата целевого канала
+            target_title (str | None): Название целевого канала (опционально)
+            is_active (bool): Статус активности (по умолчанию True)
+            
+        Returns:
+            PostingTarget | None: Объект цели или None в случае ошибки
+            
+        Действия:
+            1. Ищет запись с указанным chat_id
+            2. Обновляет существующую запись или создает новую
+        """
+        try:
+            with session_scope() as db:
+                # Ищем запись с указанным chat_id
+                target_entry = db.execute(
+                    select(PostingTarget).filter_by(target_chat_id=target_chat_id_str)
+                ).scalar_one_or_none()
+                
+                # Если запись найдена - обновляем её
+                if target_entry:
+                    # Обновляем название если оно передано
+                    if target_title is not None:
+                        target_entry.target_title = target_title
+                    # Обновляем статус активности
+                    target_entry.is_active = is_active
+                # Если записи нет - создаём новую
+                else:
+                    target_entry = PostingTarget(
+                        target_chat_id=target_chat_id_str,
+                        target_title=target_title,
+                        is_active=is_active
+                    )
+                    db.add(target_entry)
+
+                return target_entry 
+        except Exception as e:
+            logging.error(f"Error in add_or_update_target: {e}")
+            return None
+
 

@@ -24,7 +24,6 @@ from telethon.tl.types import (
 from config import settings
 
 # Импорт DB-функций
-# Используем функции вместо прямых импортов репозиториев
 from database.repositories import parsing_telegram_acc_repository, parsing_source_repository
 from database.channels import add_channel, get_channel_by_peer_id
 from database.messages import add_message
@@ -255,8 +254,6 @@ async def handle_new_message(event):
         
         TOTAL_HANDLED += 1
         logger.info(f"Обработано сообщение ID: {message.id}, всего: {TOTAL_HANDLED}")
-        if message.text and "биткоин" in message.text.lower() and "максимум" in message.text.lower():
-            logger.info(f"НАЙДЕНО СООБЩЕНИЕ ПРО ИСТОРИЧЕСКИЙ МАКСИМУМ БИТКОИНА: {message.text[:100]}")
     except Exception as e:
         logger.error(f"Ошибка при обработке сообщения: {e}")
         import traceback
@@ -302,6 +299,7 @@ async def setup_message_handlers(channel_entities):
         import traceback
         logger.error(traceback.format_exc())
 
+                         
 async def check_updates_loop():
     """Основной цикл проверки обновлений"""
     global client, active_account_id, active_sources, is_running, update_event

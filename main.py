@@ -1,13 +1,19 @@
 import sys
 import asyncio
 import logging
+
 from aiogram import Dispatcher, Bot
 from aiogram.fsm.storage.memory import MemoryStorage
+
 from telegram.bot.handlers.target_chanels_handlers import router as target_router
 from telegram.bot.handlers.source_chanels_handlers import router as source_router
 from telegram.bot.handlers.telethon_handlers import router as telethon_router
 from telegram.bot.handlers.help_handlers import router as help_router
-from telegram.parser.parser_service import start_parser_service
+from telegram.bot.posting_worker import create_bot, run_periodic_tasks
+from telegram.bot.utils.trigger_utils import trigger_posting_settings_update
+
+from telegram.parser.parser_service import start_parser_service, trigger_update as trigger_parser_update
+
 from config import settings
 
 # Настройка логирования
@@ -35,6 +41,7 @@ if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 parser_task = None
+posting_task = None
 
 async def main():
     try:
@@ -64,6 +71,18 @@ async def main():
         parser_task = start_parser_service()
         logger.info("Задача парсинга сообщений запущена")
         
+        # Запускаем сервис постинга
+        logger.info("Запуск сервиса постинга")
+        global posting_task
+        try:
+            # Создаем бота для постинга
+            posting_bot = create_bot()
+            # Запускаем задачу постинга
+            posting_task = asyncio.create_task(run_periodic_tasks(posting_bot))
+            logger.info("Задача постинга сообщений запущена")
+        except Exception as e:
+            logger.error(f"Ошибка при запуске сервиса постинга: {e}", exc_info=True)
+        
         try:
             # Запускаем опрос бота
             logger.info("Запуск опроса бота")
@@ -80,6 +99,15 @@ async def main():
                 except asyncio.CancelledError:
                     pass
                     
+            # Отменяем задачу постинга при завершении
+            if posting_task and not posting_task.done():
+                logger.info("Отмена задачи постинга")
+                posting_task.cancel()
+                try:
+                    await posting_task
+                except asyncio.CancelledError:
+                    pass
+                    
             # Закрываем соединения
             logger.info("Закрытие соединений")
             await bot.close()
@@ -87,6 +115,7 @@ async def main():
                 await dp.storage.close()
     except Exception as e:
         logger.critical(f"Неожиданная ошибка в main: {e}", exc_info=True)
+
 
 if __name__ == "__main__":
     try:
