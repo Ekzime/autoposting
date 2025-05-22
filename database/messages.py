@@ -9,31 +9,49 @@ from datetime import datetime
 
 def add_message(channel_id, message_id, text, date, photo_path, links, views) -> None:
     with Session(engine) as connection:
+        # Проверяем наличие сообщения по message_id без привязки к channel_id
         query = select(Messages).where(
             and_(
-                Messages.channel_id == channel_id,
                 Messages.message_id == message_id
             )
         )
-        result = connection.execute(query).first()
-        if result:
-            print(f"message: id:{message_id} already exist")
-            return
+        results = connection.execute(query).fetchall()
         
-        connection.add(
-            Messages(
-                channel_id = channel_id,
-                message_id = message_id,
-                text = text,
-                length = len(text),
-                date = date,
-                photo_path = photo_path,
-                links = links,
-                views = views
+        # Если сообщение есть, проверяем дополнительно
+        for result in results:
+            # Если такой message_id уже существует для какого-либо канала
+            msg = result[0]  # Получаем объект Messages
+            print(f"Найдено сообщение в БД: message_id={message_id}, channel_id={msg.channel_id}")
+            
+            # Если совпадает и channel_id и message_id, это дубликат
+            if msg.channel_id == channel_id:
+                print(f"message: id:{message_id} already exist for channel {channel_id}")
+                return
+            
+            # Возможно, канал хранится с другим ID, но это то же сообщение
+            # Проверяем текст и дату для подтверждения
+            if msg.text == text and msg.date == date:
+                print(f"message: id:{message_id} уже существует с другим channel_id")
+                return
+        
+        try:
+            connection.add(
+                Messages(
+                    channel_id = channel_id,
+                    message_id = message_id,
+                    text = text,
+                    length = len(text),
+                    date = date,
+                    photo_path = photo_path,
+                    links = links,
+                    views = views
+                )
             )
-        )
-        connection.commit()
-        print(f"Added new row to Messages\n     chat: {channel_id}\n    message: {message_id}")
+            connection.commit()
+            print(f"Added new row to Messages\n     chat: {channel_id}\n    message: {message_id}")
+        except Exception as e:
+            connection.rollback()
+            print(f"Error adding message: {e}")
 
 
 def get_all_messages() -> list[Messages]:

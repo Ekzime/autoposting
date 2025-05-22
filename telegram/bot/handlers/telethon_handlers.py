@@ -21,6 +21,9 @@ from config import settings
 from database.repositories import parsing_telegram_acc_repository as pt_repo
 from database.dao.pars_telegram_acc_repository import ParsingTelegramAccRepository
 
+# Импорт функции обновления парсера
+from telegram.parser.parser_service import trigger_update
+
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
@@ -190,6 +193,20 @@ async def process_verification_code(message: Message, state: FSMContext):
                     f"ID аккаунта: {account_info['id']}",
                     parse_mode="HTML"
                 )
+                
+                # Если это единственный аккаунт, автоматически активируем его
+                all_accounts = await asyncio.to_thread(pt_repo.get_all_accounts)
+                if len(all_accounts) == 1:
+                    await asyncio.to_thread(lambda: pt_repo.set_active_status(account_info['id'], True))
+                    await message.answer(
+                        "✅ <b>Аккаунт автоматически активирован</b>\n\n"
+                        "Так как это единственный аккаунт в системе, он был автоматически установлен как активный.",
+                        parse_mode="HTML"
+                    )
+                    
+                    # Вызываем обновление парсера
+                    trigger_update()
+                    logger.info(f"Запущено обновление парсера после добавления аккаунта {phone_number}")
             else:
                 await message.answer(
                     "❌ <b>Ошибка при сохранении аккаунта</b>\n\n"
@@ -279,6 +296,10 @@ async def process_2fa_password(message: Message, state: FSMContext):
                 "Существующий аккаунт был обновлен с новой сессией.",
                 parse_mode="HTML"
             )
+            
+            # Вызываем обновление парсера, так как сессия аккаунта обновилась
+            trigger_update()
+            logger.info(f"Запущено обновление парсера после обновления сессии аккаунта {phone_number}")
         elif account_info:
             await message.answer(
                 "✅ <b>Аккаунт успешно добавлен</b>\n\n"
@@ -286,6 +307,20 @@ async def process_2fa_password(message: Message, state: FSMContext):
                 f"ID аккаунта: {account_info['id']}",
                 parse_mode="HTML"
             )
+            
+            # Если это единственный аккаунт, автоматически активируем его
+            all_accounts = await asyncio.to_thread(pt_repo.get_all_accounts)
+            if len(all_accounts) == 1:
+                await asyncio.to_thread(lambda: pt_repo.set_active_status(account_info['id'], True))
+                await message.answer(
+                    "✅ <b>Аккаунт автоматически активирован</b>\n\n"
+                    "Так как это единственный аккаунт в системе, он был автоматически установлен как активный.",
+                    parse_mode="HTML"
+                )
+                
+                # Вызываем обновление парсера
+                trigger_update()
+                logger.info(f"Запущено обновление парсера после добавления аккаунта {phone_number}")
         else:
             await message.answer(
                 "❌ <b>Ошибка при сохранении аккаунта</b>\n\n"
@@ -401,6 +436,17 @@ async def cmd_delete_account(message: Message):
     try:
         account_id = int(command_parts[1])
         
+        # Проверяем, активен ли аккаунт перед удалением
+        account = await asyncio.to_thread(lambda: pt_repo.get_account_by_id(account_id))
+        
+        if not account:
+            await message.answer(
+                "⚠️ <b>Аккаунт не найден</b>\n\n"
+                f"Аккаунт с ID {account_id} не найден.",
+                parse_mode="HTML"
+            )
+            return
+            
         # Удаляем аккаунт
         success = await asyncio.to_thread(lambda: pt_repo.delete_account(account_id))
         
@@ -410,6 +456,11 @@ async def cmd_delete_account(message: Message):
                 f"Аккаунт с ID {account_id} успешно удален из системы.",
                 parse_mode="HTML"
             )
+            
+            # Если аккаунт был активен, вызываем обновление парсера
+            if account.get('is_active', False):
+                trigger_update()
+                logger.info(f"Запущено обновление парсера после удаления активного аккаунта {account_id}")
         else:
             await message.answer(
                 "⚠️ <b>Аккаунт не найден</b>\n\n"
@@ -429,6 +480,134 @@ async def cmd_delete_account(message: Message):
         await message.answer(
             "❌ <b>Произошла ошибка</b>\n\n"
             "Не удалось удалить аккаунт. Пожалуйста, попробуйте позже.",
+            parse_mode="HTML"
+        )
+
+#######################################################################
+#                 Account Activate Commands                           #
+#######################################################################
+@router.message(Command("activate_account"))
+async def cmd_activate_account(message: Message):
+    """Активирует аккаунт по его ID."""
+    command_parts = message.text.split()
+    
+    if len(command_parts) != 2:
+        await message.answer(
+            "ℹ️ <b>Как использовать команду</b>\n\n"
+            "Для активации аккаунта используйте формат:\n"
+            "<code>/activate_account ID</code>\n\n"
+            "Где ID - это номер аккаунта из списка /view_accounts",
+            parse_mode="HTML"
+        )
+        return
+        
+    try:
+        account_id = int(command_parts[1])
+        
+        # Деактивируем все аккаунты и активируем выбранный
+        async def _deactivate_all_and_activate_one():
+            # Сначала деактивируем все аккаунты
+            all_accounts = pt_repo.get_all_accounts()
+            for acc in all_accounts:
+                if acc['is_active'] and acc['id'] != account_id:
+                    pt_repo.set_active_status(acc['id'], False)
+            
+            # Затем активируем выбранный аккаунт
+            success = pt_repo.set_active_status(account_id, True)
+            return success, pt_repo.get_account_by_id(account_id)
+            
+        success, account = await asyncio.to_thread(_deactivate_all_and_activate_one)
+        
+        if success and account:
+            await message.answer(
+                "✅ <b>Аккаунт активирован</b>\n\n"
+                f"Аккаунт <code>{account['phone_number']}</code> (ID: {account_id}) успешно активирован.\n"
+                "Все остальные аккаунты деактивированы.",
+                parse_mode="HTML"
+            )
+            
+            # Вызываем обновление парсера
+            trigger_update()
+            logger.info(f"Запущено обновление парсера после активации аккаунта {account_id}")
+        else:
+            await message.answer(
+                "⚠️ <b>Аккаунт не найден</b>\n\n"
+                f"Аккаунт с ID {account_id} не найден или возникла ошибка при активации.",
+                parse_mode="HTML"
+            )
+            
+    except ValueError:
+        await message.answer(
+            "❌ <b>Ошибка</b>\n\n"
+            "ID аккаунта должен быть числом.",
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при активации аккаунта: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка</b>\n\n"
+            "Не удалось активировать аккаунт. Пожалуйста, попробуйте позже.",
+            parse_mode="HTML"
+        )
+
+#######################################################################
+#                 Account Deactivate Commands                         #
+#######################################################################
+@router.message(Command("deactivate_account"))
+async def cmd_deactivate_account(message: Message):
+    """Деактивирует аккаунт по его ID."""
+    command_parts = message.text.split()
+    
+    if len(command_parts) != 2:
+        await message.answer(
+            "ℹ️ <b>Как использовать команду</b>\n\n"
+            "Для деактивации аккаунта используйте формат:\n"
+            "<code>/deactivate_account ID</code>\n\n"
+            "Где ID - это номер аккаунта из списка /view_accounts",
+            parse_mode="HTML"
+        )
+        return
+        
+    try:
+        account_id = int(command_parts[1])
+        
+        # Деактивируем аккаунт
+        async def _deactivate_account():
+            success = pt_repo.set_active_status(account_id, False)
+            return success, pt_repo.get_account_by_id(account_id)
+            
+        success, account = await asyncio.to_thread(_deactivate_account)
+        
+        if success and account:
+            await message.answer(
+                "✅ <b>Аккаунт деактивирован</b>\n\n"
+                f"Аккаунт <code>{account['phone_number']}</code> (ID: {account_id}) успешно деактивирован.",
+                parse_mode="HTML"
+            )
+            
+            # Вызываем обновление парсера
+            trigger_update()
+            logger.info(f"Запущено обновление парсера после деактивации аккаунта {account_id}")
+        else:
+            await message.answer(
+                "⚠️ <b>Аккаунт не найден</b>\n\n"
+                f"Аккаунт с ID {account_id} не найден или возникла ошибка при деактивации.",
+                parse_mode="HTML"
+            )
+            
+    except ValueError:
+        await message.answer(
+            "❌ <b>Ошибка</b>\n\n"
+            "ID аккаунта должен быть числом.",
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при деактивации аккаунта: {e}")
+        await message.answer(
+            "❌ <b>Произошла ошибка</b>\n\n"
+            "Не удалось деактивировать аккаунт. Пожалуйста, попробуйте позже.",
             parse_mode="HTML"
         )
 

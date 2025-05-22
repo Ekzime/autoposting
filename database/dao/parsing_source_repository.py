@@ -44,8 +44,8 @@ class ParsingSourceRepository:
             source_title (str | None): Название источника (опционально)
             
         Returns:
-            ParsingSourceChannel | None | str: 
-                - Созданный объект источника при успешном добавлении
+            dict | None | str: 
+                - Словарь с данными созданного источника при успешном добавлении
                 - "exists" если источник уже существует
                 - None в случае ошибки
             
@@ -77,7 +77,15 @@ class ParsingSourceRepository:
                 )
                 db.add(new_source)
                 db.flush() # Чтобы new_source получил ID, если он автоинкрементный
-                return new_source
+                
+                # Вместо возврата ORM-объекта, возвращаем словарь с данными
+                return {
+                    "id": new_source.id,
+                    "posting_target_id": new_source.posting_target_id,
+                    "source_identifier": new_source.source_identifier,
+                    "source_title": new_source.source_title,
+                    "added_at": new_source.added_at.isoformat() if new_source.added_at else None
+                }
         except Exception as e:
             logging.error(f"Ошибка при добавлении источника {source_identifier} в целевой канал {posting_target_db_id}: {e}")
             return None

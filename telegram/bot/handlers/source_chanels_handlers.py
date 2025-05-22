@@ -15,6 +15,9 @@ from config import settings
 from database.repositories import parsing_source_repository as ps_repo
 from database.repositories import posting_target_repository as pt_repo
 
+# Импорт функции для обновления парсера
+from telegram.parser.parser_service import trigger_update
+
 # Настройка логгера
 logger = logging.getLogger(__name__)
 
@@ -134,8 +137,9 @@ async def process_target_choice(message: Message, state: FSMContext):
             "📝 <b>Укажите источник</b>\n\n"
             "Отправьте идентификатор источника.\n"
             "Это может быть:\n"
-            "• username канала (например: <code>@channel</code>)\n"
-            "• ID канала (например: <code>-100123456789</code>)",
+            "• username канала (например: <code>@channel</code> или <code>channel</code> - работают оба варианта)\n"
+            "• ID канала (например: <code>-100123456789</code>)\n\n"
+            "💡 <i>Символ @ для username необязателен - система обработает оба варианта.</i>",
             parse_mode="HTML"
         )
         
@@ -176,6 +180,8 @@ async def process_source_identifier(message: Message, state: FSMContext):
         
         # Очищаем и сохраняем идентификатор источника
         source_identifier = message.text.strip()
+        
+        # Сохранияем идентификатор в исходном виде, парсер сам обработает @ если нужно
         await state.update_data(source_identifier=source_identifier)
         
         # Запрашиваем название источника
@@ -245,32 +251,34 @@ async def process_source_title(message: Message, state: FSMContext):
             # Если источник уже существует
             await message.answer(
                 "⚠️ <b>Источник уже существует</b>\n\n"
-                f"Источник с идентификатором <code>{source_identifier}</code> "
-                f"уже привязан к целевому каналу с ID <code>{target_id}</code>.\n\n"
-                "Для обновления существующего источника используйте команду /update_source",
+                f"Источник <code>{source_identifier}</code> уже добавлен к выбранному целевому каналу.",
                 parse_mode="HTML"
             )
         elif result:
-            # Если источник успешно добавлен
+            # Если успешно добавлен
             await message.answer(
-                "✅ <b>Источник успешно добавлен!</b>\n\n"
-                f"📌 Целевой канал ID: <code>{target_id}</code>\n"
-                f"🔍 Идентификатор источника: <code>{source_identifier}</code>\n"
-                f"📝 Название источника: <code>{source_title or 'не задано'}</code>",
+                "✅ <b>Источник успешно добавлен</b>\n\n"
+                f"• Идентификатор: <code>{source_identifier}</code>\n"
+                f"• Название: {source_title or '<i>не указано</i>'}\n"
+                f"• ID в системе: <code>{result['id']}</code>",
                 parse_mode="HTML"
             )
+            
+            # Обновляем парсер (вызов синхронной функции)
+            trigger_update()
+            logger.info(f"Запрошено обновление парсера после добавления источника {source_identifier}")
         else:
-            # Если произошла ошибка при добавлении
+            # Если произошла ошибка
             await message.answer(
-                "❌ <b>Не удалось добавить источник</b>\n\n"
-                "Возможно, целевой канал не существует или произошла ошибка в базе данных.",
+                "❌ <b>Ошибка при добавлении источника</b>\n\n"
+                "Не удалось добавить источник. Возможно, указанного целевого канала не существует.",
                 parse_mode="HTML"
             )
         
         # Очищаем состояние FSM
         await state.clear()
     except Exception as e:
-        # Обработка неожиданных ошибок
+        # Обработка ошибок
         logger.error(f"Ошибка при добавлении источника: {e}")
         await message.answer("❌ <b>Произошла ошибка при добавлении источника.</b>", parse_mode="HTML")
         await state.clear()
@@ -589,72 +597,66 @@ async def process_update_source(message: Message, state: FSMContext):
             )
             await state.clear()
             return
-        
-        # Функция для синхронного обновления источника
-        def _update_source_sync():
-            # Если нужно изменить целевой канал
-            if new_target_id is not None:
-                # Сначала меняем целевой канал
-                target_change_result = ps_repo.change_target_for_source(
-                    source_db_id=source_id,
-                    new_target_db_id=new_target_id
-                )
-                
-                if not target_change_result:
-                    return False, None, None
             
-            # Если нужно обновить идентификатор или название
-            if new_identifier is not None or new_title is not None:
-                update_result = ps_repo.update_source(
+        # Формируем сообщение для лога изменений
+        log_message = []
+        if new_identifier:
+            log_message.append(f"идентификатор -> {new_identifier}")
+        if new_title:
+            log_message.append(f"название -> {new_title}")
+        if new_target_id:
+            log_message.append(f"целевой канал -> ID {new_target_id}")
+            
+        log_text = ", ".join(log_message)
+        logger.info(f"Обновление источника ID {source_id}: {log_text}")
+        
+        # Выполняем необходимые обновления
+        success = True
+        
+        # Если нужно изменить только идентификатор и/или название
+        if new_identifier or new_title is not None:
+            def _update_source_sync():
+                return ps_repo.update_source(
                     source_db_id=source_id,
                     new_source_identifier=new_identifier,
                     new_source_title=new_title
                 )
+            # Выполняем обновление
+            update_result = await asyncio.to_thread(_update_source_sync)
+            if not update_result:
+                success = False
                 
-                if not update_result:
-                    return False, None, None
+        # Если нужно изменить целевой канал
+        if new_target_id and success:
+            def _change_target_sync():
+                return ps_repo.change_target_for_source(source_id, new_target_id)
             
-            # Получаем информацию о новом целевом канале, если он был изменен
-            target_name = None
-            if new_target_id is not None:
-                targets = pt_repo.get_all_target_channels()
-                for target in targets:
-                    if target['id'] == new_target_id:
-                        target_name = target['target_title'] or target['target_chat_id']
-                        break
-            
-            return True, new_target_id, target_name
+            # Выполняем изменение целевого канала
+            change_result = await asyncio.to_thread(_change_target_sync)
+            if not change_result:
+                success = False
         
-        # Выполняем обновление источника
-        result = await asyncio.to_thread(_update_source_sync)
-        success, updated_target_id, target_name = result
-        
-        # Обрабатываем результат обновления
+        # Отправляем сообщение с результатами
         if success:
-            # Формируем сообщение об успешном обновлении
-            update_details = []
-            if new_identifier:
-                update_details.append(f"🔍 Новый идентификатор: <code>{new_identifier}</code>")
-            if new_title:
-                update_details.append(f"📝 Новое название: <code>{new_title}</code>")
-            if updated_target_id:
-                update_details.append(f"🎯 Новый целевой канал: <code>{target_name}</code> (ID: {updated_target_id})")
-            
-            update_info = "\n".join(update_details)
-            
             await message.answer(
-                f"✅ <b>Источник успешно обновлен!</b>\n\n"
-                f"📌 ID источника: <code>{source_id}</code>\n"
-                f"{update_info}",
+                "✅ <b>Источник успешно обновлен</b>\n\n"
+                f"Применены изменения: {log_text}",
                 parse_mode="HTML"
             )
+            
+            # Запрашиваем обновление парсера (вызов синхронной функции)
+            trigger_update()
+            logger.info("Запрошено обновление парсера после изменения источника")
         else:
             await message.answer(
-                "❌ <b>Не удалось обновить источник</b>\n\n"
-                "Возможно, источник или целевой канал не существуют, или новый идентификатор уже используется для выбранного целевого канала.",
+                "❌ <b>Ошибка при обновлении источника</b>\n\n"
+                "Не удалось применить все изменения. Возможные причины:\n"
+                "• Целевой канал не существует\n"
+                "• Идентификатор источника уже используется\n"
+                "• Произошла техническая ошибка",
                 parse_mode="HTML"
             )
-        
+            
         # Очищаем состояние FSM
         await state.clear()
     except Exception as e:
@@ -830,50 +832,46 @@ async def process_delete_confirmation(message: Message, state: FSMContext):
         state (FSMContext): Состояние FSM
     """
     try:
-        answer = message.text.lower().strip()
-        
-        if answer == "confirm":
-            # Получаем ID источника из состояния
-            data = await state.get_data()
-            source_id = data.get("source_id")
-            
-            # Удаляем источник
-            def _delete_source_sync():
-                return ps_repo.delete_source_by_id(source_id)
-            
-            success = await asyncio.to_thread(_delete_source_sync)
-            
-            if success:
-                await message.answer(
-                    "✅ <b>Источник успешно удален!</b>\n\n"
-                    f"Источник с ID <code>{source_id}</code> был удален из базы данных.",
-                    parse_mode="HTML"
-                )
-            else:
-                await message.answer(
-                    "❌ <b>Не удалось удалить источник</b>\n\n"
-                    "Возможно, источник уже был удален или произошла ошибка в базе данных.",
-                    parse_mode="HTML"
-                )
-        elif answer == "cancel":
+        # Проверяем ответ
+        if message.text.lower() not in ["да", "yes", "y", "д"]:
             await message.answer(
-                "✅ <b>Удаление отменено</b>\n\n"
+                "ℹ️ <b>Операция отменена</b>\n\n"
                 "Источник не был удален.",
                 parse_mode="HTML"
             )
-        else:
+            await state.clear()
+            return
+            
+        # Получаем ID источника
+        data = await state.get_data()
+        source_id = data["source_id"]
+        
+        # Удаляем источник
+        def _delete_source_sync():
+            return ps_repo.delete_source_by_id(source_id)
+            
+        result = await asyncio.to_thread(_delete_source_sync)
+        
+        if result:
             await message.answer(
-                "⚠️ <b>Неверный ввод</b>\n\n"
-                "Пожалуйста, отправьте <code>confirm</code> для подтверждения удаления\n"
-                "или <code>cancel</code> для отмены.",
+                "✅ <b>Источник успешно удален</b>",
                 parse_mode="HTML"
             )
-            return
-        
-        # Очищаем состояние FSM
+            
+            # Обновляем парсер (вызов синхронной функции)
+            trigger_update()
+            logger.info(f"Запрошено обновление парсера после удаления источника ID {source_id}")
+        else:
+            await message.answer(
+                "❌ <b>Ошибка при удалении источника</b>\n\n"
+                "Не удалось удалить источник. Возможно, он уже был удален.",
+                parse_mode="HTML"
+            )
+            
+        # Очищаем состояние
         await state.clear()
     except Exception as e:
-        logger.error(f"Ошибка при подтверждении удаления источника: {e}")
+        logger.error(f"Ошибка при подтверждении удаления: {e}")
         await message.answer(
             "❌ <b>Произошла ошибка при удалении источника</b>",
             parse_mode="HTML"
