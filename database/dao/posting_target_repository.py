@@ -283,48 +283,103 @@ class PostingTargetRepository:
                 logging.error(f"Error in toggle_target_active_status: {e}")
                 return False
                 
-    def add_or_update_target(self, target_chat_id_str: str, target_title: str | None, is_active: bool = True) -> PostingTarget | None:
+    def add_or_update_target(self, target_chat_id_str: str, target_title: str | None, is_active: bool) -> PostingTarget | None:
         """
         Добавляет новую или обновляет существующую цель для постинга.
         
         Args:
-            target_chat_id_str (str): ID чата целевого канала
-            target_title (str | None): Название целевого канала (опционально)
-            is_active (bool): Статус активности (по умолчанию True)
+            target_chat_id_str (str): ID чата целевого канала или @username
+            target_title (str | None): Название канала (может быть None)
+            is_active (bool): Флаг активности канала
             
         Returns:
-            PostingTarget | None: Объект цели или None в случае ошибки
-            
-        Действия:
-            1. Ищет запись с указанным chat_id
-            2. Обновляет существующую запись или создает новую
+            PostingTarget|None: Объект PostingTarget в случае успешного добавления/обновления, None в случае ошибки
         """
         try:
+            # Проверяем и корректируем формат ID канала
+            corrected_id = self._correct_chat_id_format(target_chat_id_str)
+            
             with session_scope() as db:
-                # Ищем запись с указанным chat_id
-                target_entry = db.execute(
-                    select(PostingTarget).filter_by(target_chat_id=target_chat_id_str)
+                # Проверяем, существует ли уже такой канал
+                existing_target = db.execute(
+                    select(PostingTarget).filter_by(target_chat_id=corrected_id)
                 ).scalar_one_or_none()
                 
-                # Если запись найдена - обновляем её
-                if target_entry:
-                    # Обновляем название если оно передано
+                if existing_target:
+                    # Если канал существует, обновляем его
                     if target_title is not None:
-                        target_entry.target_title = target_title
-                    # Обновляем статус активности
-                    target_entry.is_active = is_active
-                # Если записи нет - создаём новую
+                        existing_target.target_title = target_title
+                    existing_target.is_active = is_active
+                    db.flush()
+                    return existing_target
                 else:
-                    target_entry = PostingTarget(
-                        target_chat_id=target_chat_id_str,
+                    # Если канала нет, создаем новый
+                    new_target = PostingTarget(
+                        target_chat_id=corrected_id,
                         target_title=target_title,
                         is_active=is_active
                     )
-                    db.add(target_entry)
-
-                return target_entry 
+                    db.add(new_target)
+                    db.flush()
+                    return new_target
         except Exception as e:
-            logging.error(f"Error in add_or_update_target: {e}")
+            logging.error(f"Ошибка при добавлении/обновлении целевого канала {target_chat_id_str}: {e}")
             return None
+
+    def _correct_chat_id_format(self, chat_id: str) -> str:
+        """
+        Проверяет и исправляет формат ID канала.
+        
+        Args:
+            chat_id (str): ID канала или @username
+            
+        Returns:
+            str: Исправленный ID канала
+        
+        Правила:
+        1. Если ID начинается с '@', оставляем как есть (публичный канал)
+        2. Если ID числовой и начинается с '-100', оставляем как есть (приватный канал, правильный формат)
+        3. Если ID числовой, отрицательный, но не начинается с '-100', добавляем префикс '-100'
+        4. Если ID не подходит под предыдущие случаи, возвращаем как есть
+        """
+        # Логируем исходный ID для отладки
+        logging.debug(f"Проверка формата ID канала: {chat_id}")
+        
+        # Публичный канал - оставляем как есть
+        if chat_id.startswith('@'):
+            return chat_id
+        
+        # Если это числовой ID
+        try:
+            # Пробуем преобразовать в число
+            numeric_id = int(chat_id)
+            
+            # Если это отрицательное число (ID канала)
+            if numeric_id < 0:
+                # Если это уже в формате -100..., оставляем как есть
+                if chat_id.startswith('-100'):
+                    return chat_id
+                
+                # Если просто отрицательное число, конвертируем в правильный формат
+                # Убираем минус, добавляем префикс -100
+                correct_id = f"-100{abs(numeric_id)}"
+                logging.info(f"ID канала исправлен с {chat_id} на {correct_id} (добавлен префикс -100)")
+                return correct_id
+            
+            # Если положительное число, предполагаем что пользователь забыл добавить минус
+            correct_id = f"-100{numeric_id}"
+            logging.info(f"ID канала исправлен с {chat_id} на {correct_id} (добавлены префиксы - и 100)")
+            return correct_id
+        except ValueError:
+            # Если не удалось преобразовать в число, значит это не числовой ID
+            # Возможно, это публичный канал без @
+            if not chat_id.startswith('@') and not chat_id.startswith('-'):
+                # Добавляем @ для публичного канала
+                correct_id = f"@{chat_id}"
+                logging.info(f"ID канала исправлен с {chat_id} на {correct_id} (добавлен префикс @)")
+                return correct_id
+        
+        # Если не удалось определить формат, возвращаем как есть
+        return chat_id
 
 

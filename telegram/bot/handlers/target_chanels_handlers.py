@@ -122,13 +122,32 @@ async def cmd_process_channel_id(message: Message, state: FSMContext):
     
     try:
         # Пробуем преобразовать в число для случая с ID канала
-        try:
+        if channel_id.startswith('-100') and channel_id[4:].isdigit():
+            # Это ID приватного канала в правильном формате
             numeric_id = int(channel_id)
-            logger.info(f"Получен числовой ID канала: {numeric_id}")
+            logger.info(f"Получен числовой ID приватного канала: {numeric_id}")
             target_id = str(numeric_id)
             # Предлагаем базовое название для числового ID
             suggested_title = f"Channel {numeric_id}"
-        except ValueError:
+        elif channel_id.lstrip('-').isdigit():
+            # Это числовой ID, но без префикса -100
+            numeric_id = int(channel_id)
+            if channel_id.startswith('-'):
+                # Возможно, пользователь забыл добавить "100" после "-"
+                await message.answer(
+                    "⚠️ <b>Внимание! Неверный формат ID канала</b>\n\n"
+                    f"Вы ввели: <code>{channel_id}</code>\n\n"
+                    "Для приватных каналов ID должен начинаться с <code>-100</code>.\n"
+                    "Правильный формат: <code>-100XXXXXXXXXX</code>\n\n"
+                    "Пожалуйста, проверьте ID и попробуйте снова.",
+                    parse_mode="HTML"
+                )
+                return
+            else:
+                logger.info(f"Получен числовой ID канала: {numeric_id}")
+                target_id = str(numeric_id)
+                suggested_title = f"Channel {numeric_id}"
+        else:
             # Если не получилось преобразовать в число, значит это username
             if channel_id.startswith('@'):
                 target_id = channel_id
@@ -141,8 +160,31 @@ async def cmd_process_channel_id(message: Message, state: FSMContext):
         # Сохраняем ID в состоянии FSM
         await state.update_data(target_id=target_id, suggested_title=suggested_title)
         
+        # Информируем пользователя о формате ID
+        format_info = ""
+        if target_id.startswith('@'):
+            format_info = (
+                "ℹ️ <b>Информация:</b> Вы указали публичный канал по username.\n"
+                "Убедитесь, что бот добавлен в канал как администратор."
+            )
+        elif target_id.startswith('-100'):
+            format_info = (
+                "ℹ️ <b>Информация:</b> Вы указали приватный канал по ID в правильном формате.\n"
+                "Убедитесь, что бот добавлен в канал как администратор."
+            )
+        else:
+            format_info = (
+                "⚠️ <b>Обратите внимание:</b> Формат ID канала может быть неверным.\n"
+                "• Для публичных каналов используйте формат: <code>@username</code>\n"
+                "• Для приватных каналов используйте формат: <code>-100XXXXXXXXXX</code>"
+            )
+        
         # Переходим к вводу названия
-        await message.answer(f"Теперь введите название для канала для отображения в боте {target_id}:")
+        await message.answer(
+            f"{format_info}\n\n"
+            f"Теперь введите название для канала {target_id} для отображения в боте:",
+            parse_mode="HTML"
+        )
         await state.set_state(SetChannelState.waiting_for_title)
 
     except Exception as e:
@@ -259,11 +301,47 @@ async def cmd_all_targets(message: Message):
     else:
         channels_list = ["<b>📋 Список всех целевых каналов:</b>"]
     
+    has_potential_issues = False
+    
     for channel in all_target_channels:
         status = "✅ <b>Активен</b>" if channel['is_active'] else "❌ <b>Неактивен</b>"
-        channels_list.append(f"<b>🆔 ID канала:</b> <code>{channel['target_chat_id']}</code>\n"
-                           f"<b>📝 Название:</b> {channel['target_title']}\n"
-                           f"<b>📊 Статус:</b> {status}\n")
+        
+        # Проверяем формат ID канала и добавляем предупреждение если нужно
+        channel_id = channel['target_chat_id']
+        id_format_warning = ""
+        
+        if channel_id.startswith('@'):
+            id_type = "Публичный (username)"
+        elif channel_id.startswith('-100') and channel_id[4:].isdigit():
+            id_type = "Приватный (корректный ID)"
+        elif channel_id.lstrip('-').isdigit():
+            id_type = "⚠️ Некорректный формат ID"
+            id_format_warning = "\n<b>⚠️ Возможная проблема:</b> ID приватного канала должен начинаться с -100"
+            has_potential_issues = True
+        elif not (channel_id.startswith('@') or channel_id.isdigit() or (channel_id.startswith('-') and channel_id[1:].isdigit())):
+            id_type = "⚠️ Некорректный формат"
+            id_format_warning = "\n<b>⚠️ Возможная проблема:</b> ID канала должен быть в формате @username или -100XXXXXXXXXX"
+            has_potential_issues = True
+        else:
+            id_type = "Неизвестный формат"
+            id_format_warning = "\n<b>⚠️ Возможная проблема:</b> Формат ID канала может быть неверным"
+            has_potential_issues = True
+        
+        channels_list.append(
+            f"<b>🆔 ID канала:</b> <code>{channel['target_chat_id']}</code>\n"
+            f"<b>📝 Название:</b> {channel['target_title']}\n"
+            f"<b>📊 Статус:</b> {status}\n"
+            f"<b>🔄 Тип ID:</b> {id_type}{id_format_warning}\n"
+        )
+    
+    # Добавляем примечание о форматах ID, если есть потенциальные проблемы
+    if has_potential_issues:
+        channels_list.append(
+            "\n<b>ℹ️ Примечание о форматах ID:</b>\n"
+            "• Публичные каналы: <code>@username</code>\n"
+            "• Приватные каналы: <code>-100XXXXXXXXXX</code>\n"
+            "Неверный формат ID может привести к ошибкам при отправке сообщений."
+        )
     
     await message.answer("\n\n".join(channels_list), parse_mode="HTML")
 
@@ -804,4 +882,102 @@ async def cmd_targets_with_sources(message: Message):
     except Exception as e:
         logger.error(f"Ошибка при получении целевых каналов с источниками: {e}")
         await message.answer("❌ <b>Произошла ошибка при выполнении команды.</b>", parse_mode="HTML")
+
+
+@router.message(Command("check_fix_channels"))
+async def cmd_check_fix_channels(message: Message):
+    """
+    Обработчик команды для проверки и исправления форматов ID каналов в базе данных.
+    Проверяет все каналы и исправляет ID, которые имеют неправильный формат.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+    """
+    await message.answer("🔍 Начинаю проверку форматов ID каналов...", parse_mode="HTML")
+    
+    def _fix_channels_sync():
+        """
+        Проверяет и исправляет форматы ID каналов в базе данных.
+        
+        Returns:
+            dict: Словарь с информацией о результатах проверки и исправления.
+        """
+        try:
+            # Получаем все каналы
+            all_channels = pt_repo.get_all_target_channels()
+            if not all_channels:
+                return {"status": "info", "message": "В базе данных нет целевых каналов."}
+            
+            fixes = []
+            no_changes = []
+            
+            # Проверяем каждый канал
+            for channel in all_channels:
+                original_id = channel['target_chat_id']
+                corrected_id = pt_repo._correct_chat_id_format(original_id)
+                
+                if original_id != corrected_id:
+                    # Нужно исправить ID
+                    # Обновляем канал с исправленным ID
+                    pt_repo.add_or_update_target(
+                        target_chat_id_str=corrected_id,
+                        target_title=channel['target_title'],
+                        is_active=channel['is_active']
+                    )
+                    
+                    # Старая запись может остаться, удаляем её
+                    pt_repo.delete_target(original_id)
+                    
+                    fixes.append({
+                        "original": original_id,
+                        "corrected": corrected_id,
+                        "title": channel['target_title']
+                    })
+                else:
+                    # ID уже в правильном формате
+                    no_changes.append({
+                        "id": original_id,
+                        "title": channel['target_title']
+                    })
+            
+            return {
+                "status": "success",
+                "fixed": fixes,
+                "no_changes": no_changes
+            }
+        except Exception as e:
+            logger.error(f"Ошибка при исправлении форматов ID каналов: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    # Выполняем проверку и исправление в отдельном потоке
+    result = await asyncio.to_thread(_fix_channels_sync)
+    
+    if result["status"] == "info":
+        await message.answer(result["message"])
+        return
+    elif result["status"] == "error":
+        await message.answer(f"❌ Произошла ошибка: {result['message']}")
+        return
+    
+    # Формируем отчет
+    fixed_count = len(result["fixed"])
+    no_changes_count = len(result["no_changes"])
+    
+    report = [f"<b>📊 Результаты проверки ID каналов:</b>"]
+    
+    if fixed_count > 0:
+        report.append(f"\n<b>✅ Исправлено каналов:</b> {fixed_count}")
+        for fix in result["fixed"]:
+            report.append(
+                f"• <b>{fix['title']}</b>\n"
+                f"  Старый ID: <code>{fix['original']}</code>\n"
+                f"  Новый ID: <code>{fix['corrected']}</code>"
+            )
+    
+    report.append(f"\n<b>ℹ️ Каналов без изменений:</b> {no_changes_count}")
+    
+    if fixed_count > 0:
+        report.append("\n<b>🔔 Рекомендация:</b> Проверьте работу каналов, ID которых были исправлены, отправив тестовое сообщение.")
+    
+    await message.answer("\n\n".join(report), parse_mode="HTML")
 
