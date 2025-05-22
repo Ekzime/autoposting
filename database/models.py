@@ -43,6 +43,7 @@ class NewsStatus(enum.Enum):
     - ERROR_AI_PROCESSING: ошибка при обработке ИИ
     - POSTED: опубликовано
     - ERROR_POSTING: ошибка при публикации
+    - ERROR_PERMANENT: окончательная ошибка после нескольких попыток
     """
     NEW = "new"
     SENT_TO_AI = "sent_to_ai"
@@ -51,6 +52,7 @@ class NewsStatus(enum.Enum):
     ERROR_AI_PROCESSING = "error_ai_processing"
     POSTED = "posted"  
     ERROR_POSTING = "error_posting"
+    ERROR_PERMANENT = "error_permanent"
 
 
 class ParsingSourceChannel(BaseModel):
@@ -117,6 +119,8 @@ class Messages(BaseModel):
     views:      Mapped[int]               = mapped_column(Integer, nullable=False, default=0)  # Количество просмотров
     status:     Mapped[NewsStatus]        = mapped_column(SQLAlchemyEnum(NewsStatus), default=NewsStatus.NEW, index=True)  # Статус обработки
     ai_processed_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # Текст после обработки ИИ
+    retry_count: Mapped[int]              = mapped_column(Integer, default=0)  # Счетчик попыток обработки
+    error_info: Mapped[str | None]        = mapped_column(String(500), nullable=True)  # Подробная информация об ошибке
 
     channel: Mapped[Channels] = relationship("Channels", back_populates="messages")  # Связь многие-к-одному с каналом
    

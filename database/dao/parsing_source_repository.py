@@ -319,3 +319,53 @@ class ParsingSourceRepository:
         except Exception as e:
             logging.error(f"Ошибка при обновлении источника с id {source_db_id}: {e}", exc_info=True)
             return False
+
+    def copy_source_to_target(self, source_id: int, new_target_id: int) -> bool:
+        """
+        Копирует существующий источник парсинга в новый целевой канал.
+        
+        Args:
+            source_id (int): ID источника парсинга для копирования
+            new_target_id (int): ID целевого канала, в который нужно скопировать источник
+            
+        Returns:
+            bool: True в случае успешного копирования, False если источник не найден или произошла ошибка
+        """
+        try:
+            with session_scope() as db:
+                # Получаем исходный источник по ID
+                source = db.get(ParsingSourceChannel, source_id)
+                if not source:
+                    logging.error(f"Источник с id {source_id} не найден")
+                    return False
+                
+                # Проверяем существование целевого канала
+                target = db.get(PostingTarget, new_target_id)
+                if not target:
+                    logging.error(f"Целевой канал с id {new_target_id} не найден")
+                    return False
+                
+                # Проверяем, не существует ли уже такой источник для целевого канала
+                existing_source = db.execute(
+                    select(ParsingSourceChannel)
+                    .filter_by(
+                        source_identifier=source.source_identifier,
+                        posting_target_id=new_target_id
+                    )
+                ).scalar_one_or_none()
+                
+                if existing_source:
+                    logging.warning(f"Источник с идентификатором {source.source_identifier} уже существует для целевого канала {new_target_id}")
+                    return False
+                
+                # Создаем новый источник на основе существующего
+                new_source = ParsingSourceChannel(
+                    posting_target_id=new_target_id,
+                    source_identifier=source.source_identifier,
+                    source_title=source.source_title
+                )
+                db.add(new_source)
+                return True
+        except Exception as e:
+            logging.error(f"Ошибка при копировании источника {source_id} в целевой канал {new_target_id}: {e}")
+            return False

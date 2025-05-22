@@ -44,7 +44,12 @@ class DeleteSourceStates(StatesGroup):
     waiting_for_source_id = State()
     confirming_deletion = State()
 
-    
+# Добавляем новые состояния для копирования источника
+class CopySourceStates(StatesGroup):
+    """Состояния для процесса копирования источника в другой канал"""
+    waiting_for_source_id = State()
+    waiting_for_target_id = State()
+
 #######################################################################
 #                                                                     #
 #                    Handlers Add Source                              #
@@ -833,7 +838,7 @@ async def process_delete_confirmation(message: Message, state: FSMContext):
     """
     try:
         # Проверяем ответ
-        if message.text.lower() not in ["да", "yes", "y", "д"]:
+        if message.text.lower() not in ["да", "yes", "y", "д", "confirm"]:
             await message.answer(
                 "ℹ️ <b>Операция отменена</b>\n\n"
                 "Источник не был удален.",
@@ -973,3 +978,243 @@ async def cmd_view_all_sources(message: Message):
             "❌ <b>Произошла ошибка при получении списка источников</b>",
             parse_mode="HTML"
         )
+
+#######################################################################
+#                                                                     #
+#                    Copy Source to Target                            #
+#                                                                     #
+#######################################################################
+@router.message(Command("copy_source"))
+async def cmd_copy_source(message: Message, state: FSMContext):
+    """
+    Обработчик команды /copy_source для копирования источника в другой целевой канал.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+    """
+    try:
+        # Получаем список всех источников и целей
+        def _get_all_sources_sync():
+            return ps_repo.get_all_sources()
+            
+        def _get_all_targets_sync():
+            return pt_repo.get_all_target_channels()
+        
+        sources = await asyncio.to_thread(_get_all_sources_sync)
+        targets = await asyncio.to_thread(_get_all_targets_sync)
+        
+        if not sources:
+            await message.answer(
+                "❌ <b>Нет доступных источников для копирования</b>\n\n"
+                "Сначала добавьте источник с помощью команды /add_source",
+                parse_mode="HTML"
+            )
+            return
+            
+        if len(targets) < 2:
+            await message.answer(
+                "❌ <b>Недостаточно целевых каналов</b>\n\n"
+                "Для копирования источника нужно минимум два целевых канала. "
+                "Добавьте канал с помощью команды /add_target",
+                parse_mode="HTML"
+            )
+            return
+        
+        # Создаем словарь для быстрого поиска названий каналов по их ID
+        target_names = {}
+        for target in targets:
+            target_names[target['id']] = target['target_title'] or target['target_chat_id']
+        
+        # Формируем список источников для выбора
+        sources_list = ["<b>Выберите источник для копирования:</b>"]
+        for source in sources:
+            target_name = target_names.get(source['posting_target_id'], f"ID: {source['posting_target_id']}")
+            source_title = source['source_title'] or source['source_identifier']
+            sources_list.append(
+                f"<code>{source['id']}</code>: {source_title} "
+                f"(для канала {target_name})"
+            )
+        
+        # Отправляем сообщение с выбором источника
+        await message.answer(
+            "\n".join(sources_list),
+            parse_mode="HTML"
+        )
+        
+        # Переходим к ожиданию выбора источника
+        await state.set_state(CopySourceStates.waiting_for_source_id)
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка источников для копирования: {e}")
+        await message.answer("❌ <b>Произошла ошибка при выполнении команды</b>", parse_mode="HTML")
+
+
+@router.message(CopySourceStates.waiting_for_source_id)
+async def process_copy_source_id(message: Message, state: FSMContext):
+    """
+    Обработчик выбора источника для копирования.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+    """
+    try:
+        if not message.text.isdigit():
+            await message.answer(
+                "⚠️ <b>Ошибка ввода</b>\n\n"
+                "ID источника должен быть числом. Пожалуйста, введите корректный ID.",
+                parse_mode="HTML"
+            )
+            return
+            
+        source_id = int(message.text)
+        
+        # Сохраняем ID источника в состоянии
+        await state.update_data(source_id=source_id)
+        
+        # Получаем информацию об источнике и доступных целях
+        def _get_source_and_targets():
+            source = None
+            all_sources = ps_repo.get_all_sources()
+            for s in all_sources:
+                if s['id'] == source_id:
+                    source = s
+                    break
+                    
+            if not source:
+                return None, []
+                
+            # Получаем все цели, кроме той, к которой уже привязан источник
+            all_targets = pt_repo.get_all_target_channels()
+            available_targets = [
+                t for t in all_targets 
+                if t['id'] != source['posting_target_id']
+            ]
+            
+            return source, available_targets
+            
+        source, available_targets = await asyncio.to_thread(_get_source_and_targets)
+        
+        if not source:
+            await message.answer(
+                f"❌ <b>Источник с ID {source_id} не найден</b>\n\n"
+                "Пожалуйста, проверьте ID и попробуйте снова.",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+            
+        if not available_targets:
+            await message.answer(
+                "❌ <b>Нет доступных целевых каналов для копирования</b>\n\n"
+                "Этот источник уже привязан ко всем имеющимся каналам.",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+            
+        # Сохраняем информацию об источнике
+        await state.update_data(source_info=source)
+        
+        # Формируем список целей для выбора
+        targets_list = ["<b>Выберите целевой канал для копирования источника:</b>"]
+        for target in available_targets:
+            status = "✅ Активен" if target['is_active'] else "❌ Неактивен"
+            targets_list.append(
+                f"<code>{target['id']}</code>: {target['target_title']} ({status})"
+            )
+            
+        # Отправляем сообщение с выбором цели
+        await message.answer(
+            "\n".join(targets_list),
+            parse_mode="HTML"
+        )
+        
+        # Переходим к ожиданию выбора цели
+        await state.set_state(CopySourceStates.waiting_for_target_id)
+    except Exception as e:
+        logger.error(f"Ошибка при обработке выбора источника для копирования: {e}")
+        await message.answer("❌ <b>Произошла ошибка при выполнении команды</b>", parse_mode="HTML")
+        await state.clear()
+
+
+@router.message(CopySourceStates.waiting_for_target_id)
+async def process_copy_target_id(message: Message, state: FSMContext):
+    """
+    Обработчик выбора целевого канала для копирования источника.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+    """
+    try:
+        if not message.text.isdigit():
+            await message.answer(
+                "⚠️ <b>Ошибка ввода</b>\n\n"
+                "ID канала должен быть числом. Пожалуйста, введите корректный ID.",
+                parse_mode="HTML"
+            )
+            return
+            
+        target_id = int(message.text)
+        
+        # Получаем данные из состояния
+        data = await state.get_data()
+        source_id = data['source_id']
+        source_info = data['source_info']
+        
+        # Проверяем существование цели и копируем источник
+        def _check_and_copy():
+            # Проверяем существование цели
+            all_targets = pt_repo.get_all_target_channels()
+            target_exists = False
+            target_info = None
+            
+            for t in all_targets:
+                if t['id'] == target_id:
+                    target_exists = True
+                    target_info = t
+                    break
+                    
+            if not target_exists:
+                return False, None, "Целевой канал не найден"
+                
+            # Копируем источник в новую цель
+            success = ps_repo.copy_source_to_target(source_id, target_id)
+            
+            if not success:
+                return False, None, "Не удалось скопировать источник. Возможно, он уже существует для этого канала."
+                
+            return True, target_info, None
+            
+        success, target_info, error_message = await asyncio.to_thread(_check_and_copy)
+        
+        if not success:
+            await message.answer(
+                f"❌ <b>Ошибка при копировании источника</b>\n\n"
+                f"{error_message}",
+                parse_mode="HTML"
+            )
+            await state.clear()
+            return
+            
+        # Отправляем сообщение об успешном копировании
+        source_title = source_info['source_title'] or source_info['source_identifier']
+        target_title = target_info['target_title'] or target_info['target_chat_id']
+        
+        await message.answer(
+            f"✅ <b>Источник успешно скопирован</b>\n\n"
+            f"Источник <b>{source_title}</b> скопирован в канал <b>{target_title}</b>.",
+            parse_mode="HTML"
+        )
+        
+        # Обновляем парсер
+        trigger_update()
+        logger.info(f"Запрошено обновление парсера после копирования источника ID {source_id} в канал ID {target_id}")
+        
+        # Очищаем состояние
+        await state.clear()
+    except Exception as e:
+        logger.error(f"Ошибка при обработке выбора целевого канала для копирования: {e}")
+        await message.answer("❌ <b>Произошла ошибка при выполнении команды</b>", parse_mode="HTML")
+        await state.clear()

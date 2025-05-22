@@ -8,6 +8,7 @@ from datetime import datetime  # Для работы с датой и време
 
 from aiogram import Bot  
 from aiogram.types import FSInputFile  # Для отправки файлов в Aiogram 3.x
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest  # Импорт исключений Telegram
 
 # SQLAlchemy для работы с базой данных
 from sqlalchemy.orm import sessionmaker  # Для создания сессий БД
@@ -41,6 +42,37 @@ logging.info("posting_worker.py загружен")
 
 # Глобальные переменные
 last_targets_check = datetime.now()  # Время последней проверки целевых каналов
+
+async def check_bot_in_channel(bot: Bot, channel_id: str | int) -> bool:
+    """
+    Проверяет, является ли бот участником канала.
+    
+    Args:
+        bot (Bot): Экземпляр бота для проверки
+        channel_id (str | int): ID канала или username
+    
+    Returns:
+        bool: True, если бот является участником канала, иначе False
+    """
+    try:
+        # Пытаемся получить информацию о чате
+        chat = await bot.get_chat(channel_id)
+        
+        # Получаем ID бота
+        bot_info = await bot.get_me()
+        bot_id = bot_info.id
+        
+        # Проверяем, является ли бот администратором канала
+        try:
+            chat_member = await bot.get_chat_member(chat.id, bot_id)
+            return True  # Если получили информацию о боте в канале, значит он там есть
+        except TelegramBadRequest:
+            return False  # Ошибка запроса - скорее всего бота нет в канале
+    
+    except Exception as e:
+        logging.error(f"Ошибка при проверке бота в канале {channel_id}: {e}")
+        return False  # В случае ошибки предполагаем, что бота нет в канале
+
 
 async def post_message_to_telegram(
     bot: Bot | None, 
@@ -86,6 +118,13 @@ async def post_message_to_telegram(
     # --- КОНЕЦ ДИАГНОСТИКИ ---
 
     try:
+        # Проверяем, является ли бот участником канала
+        bot_in_channel = await check_bot_in_channel(bot, chat_id_for_send)
+        if not bot_in_channel:
+            error_msg = f"Бот не является участником канала {chat_id_for_send}. Добавьте бота в канал как администратора."
+            logging.error(f"ID {message_db_id}: {error_msg}")
+            return False
+
         # Проверка наличия изображения
         photo_path = f"database/photos/{message_db_id}.jpg"
         has_photo = os.path.exists(photo_path)
@@ -110,9 +149,50 @@ async def post_message_to_telegram(
             
         logging.info(f"ID {message_db_id}: Сообщение УСПЕШНО отправлено в Telegram канал '{chat_id_for_send}'.")
         return True
+    except TelegramForbiddenError as e:
+        error_msg = f"Ошибка доступа: бот не имеет прав для отправки сообщений в канал {chat_id_for_send}. Убедитесь, что бот добавлен в канал как администратор."
+        logging.error(f"ID {message_db_id}: {error_msg} Подробности: {e}")
+        # Сохраняем дополнительную информацию в сообщении о причине ошибки
+        await _update_message_error_info(message_db_id, error_msg)
+        return False
     except Exception as e:
         logging.error(f"ID {message_db_id}: ОШИБКА при отправке сообщения в Telegram с chat_id='{chat_id_for_send}': {e}", exc_info=True)
+        # Сохраняем информацию об ошибке
+        await _update_message_error_info(message_db_id, str(e))
         return False
+
+
+async def _update_message_error_info(message_id: int, error_info: str) -> None:
+    """
+    Обновляет информацию об ошибке в сообщении.
+    
+    Args:
+        message_id (int): ID сообщения
+        error_info (str): Информация об ошибке
+    """
+    def _update_sync():
+        with SessionLocal() as session:
+            message = session.get(Messages, message_id)
+            if message:
+                # Добавляем поле для хранения ошибки, если его нет
+                try:
+                    if not hasattr(message, 'error_info'):
+                        from sqlalchemy import Column, String
+                        Messages.error_info = Column(String(500), nullable=True)
+                        logging.info(f"Добавлено поле error_info в модель Messages")
+                except Exception as e:
+                    logging.warning(f"Не удалось проверить/добавить поле error_info: {e}")
+                
+                # Сохраняем информацию об ошибке
+                try:
+                    message.error_info = error_info[:500]  # Ограничиваем длину текста ошибки
+                    session.commit()
+                    logging.info(f"ID {message_id}: Сохранена информация об ошибке")
+                except Exception as e:
+                    logging.error(f"ID {message_id}: Ошибка при сохранении информации об ошибке: {e}")
+                    session.rollback()
+    
+    await asyncio.to_thread(_update_sync)
 
 
 async def get_messages_for_ai_processing(limit: int = 5) -> list[Messages]:
@@ -441,6 +521,160 @@ async def simplified_process_message(message_id: int, original_text: str):
         )
 
 
+async def get_messages_with_errors(limit: int = 2, max_retry_count: int = 3) -> list[Messages]:
+    """
+    Получает сообщения с ошибками, которые можно повторно обработать.
+    
+    Args:
+        limit (int): Максимальное количество сообщений для получения. По умолчанию 2.
+        max_retry_count (int): Максимальное количество попыток обработки. По умолчанию 3.
+        
+    Returns:
+        list[Messages]: Список объектов Messages с ошибками для повторной обработки.
+        
+    Действия:
+    1. Получает сообщения со статусами ERROR_AI_PROCESSING и ERROR_POSTING
+    2. Фильтрует по количеству попыток обработки (меньше max_retry_count)
+    3. Сортирует по дате (старые в начале)
+    4. Ограничивает количество записей параметром limit
+    """
+    
+    logging.info("Получение сообщений с ошибками для повторной обработки...")
+    
+    def _get_sync():
+        with SessionLocal() as session:
+            # Добавляем поле для хранения количества попыток обработки, если его нет
+            try:
+                if not hasattr(Messages, 'retry_count'):
+                    from sqlalchemy import Column, Integer
+                    Messages.retry_count = Column(Integer, default=0)
+                    logging.info("Добавлено поле retry_count в модель Messages")
+            except Exception as e:
+                logging.warning(f"Не удалось проверить/добавить поле retry_count: {e}")
+            
+            # Запрос на получение сообщений с ошибками
+            query = (
+                select(Messages)
+                .where(
+                    (Messages.status == NewsStatus.ERROR_AI_PROCESSING) | 
+                    (Messages.status == NewsStatus.ERROR_POSTING),
+                    (Messages.retry_count < max_retry_count) | (Messages.retry_count == None)
+                )
+                .order_by(Messages.date.asc())
+                .limit(limit)
+            )
+            return session.execute(query).scalars().all()
+            
+    messages = await asyncio.to_thread(_get_sync)
+    
+    if messages:
+        logging.info(f"Найдено {len(messages)} сообщений с ошибками для повторной обработки.")
+    else:
+        logging.info("Нет сообщений с ошибками для повторной обработки.")
+        
+    return messages
+
+
+async def increment_retry_count(message_id: int) -> None:
+    """
+    Увеличивает счетчик попыток обработки сообщения.
+    
+    Args:
+        message_id (int): ID сообщения для обновления
+    """
+    
+    def _update_sync():
+        with SessionLocal() as session:
+            message = session.get(Messages, message_id)
+            if message:
+                if hasattr(message, 'retry_count') and message.retry_count is not None:
+                    message.retry_count += 1
+                else:
+                    message.retry_count = 1
+                session.commit()
+                logging.info(f"ID {message_id}: Увеличен счетчик попыток обработки до {message.retry_count}")
+            else:
+                logging.warning(f"ID {message_id}: Сообщение не найдено для обновления счетчика попыток")
+                
+    await asyncio.to_thread(_update_sync)
+
+
+async def process_error_messages() -> None:
+    """
+    Повторно обрабатывает сообщения с ошибками.
+    
+    Действия:
+    1. Получает сообщения с ошибками обработки AI и постинга
+    2. Для каждого сообщения:
+       - Увеличивает счетчик попыток
+       - В зависимости от статуса ошибки повторно обрабатывает через AI или отправляет в постинг
+    """
+    logging.info("Запуск обработки сообщений с ошибками")
+    
+    messages = await get_messages_with_errors(limit=2)
+    
+    if not messages:
+        return
+        
+    for msg in messages:
+        # Увеличиваем счетчик попыток
+        await increment_retry_count(msg.id)
+        
+        if msg.status == NewsStatus.ERROR_AI_PROCESSING:
+            # Повторная обработка через AI
+            if msg.text:
+                logging.info(f"ID {msg.id}: Повторная отправка в AI")
+                await simplified_process_message(msg.id, msg.text)
+            else:
+                logging.warning(f"ID {msg.id}: Отсутствует текст для повторной обработки")
+                await _update_message_status(
+                    msg.id,
+                    NewsStatus.ERROR_PERMANENT,
+                    "Отсутствует исходный текст для обработки"
+                )
+        
+        elif msg.status == NewsStatus.ERROR_POSTING:
+            # Повторная отправка в постинг (статус остается AI_PROCESSED)
+            if msg.ai_processed_text:
+                logging.info(f"ID {msg.id}: Сброс статуса на AI_PROCESSED для повторного постинга")
+                await _update_message_status(msg.id, NewsStatus.AI_PROCESSED)
+            else:
+                logging.warning(f"ID {msg.id}: Отсутствует обработанный текст для повторного постинга")
+                await _update_message_status(
+                    msg.id,
+                    NewsStatus.ERROR_PERMANENT,
+                    "Отсутствует обработанный текст для постинга"
+                )
+        
+        await asyncio.sleep(1)  # Пауза между обработкой сообщений
+
+
+async def mark_permanently_failed_messages() -> None:
+    """
+    Помечает сообщения, которые не удалось обработать после максимального количества попыток.
+    """
+    def _update_sync():
+        with SessionLocal() as session:
+            # Запрос на обновление статуса сообщений с превышенным количеством попыток
+            stmt = (
+                update(Messages)
+                .where(
+                    ((Messages.status == NewsStatus.ERROR_AI_PROCESSING) | 
+                     (Messages.status == NewsStatus.ERROR_POSTING)),
+                    Messages.retry_count >= 3
+                )
+                .values(status=NewsStatus.ERROR_PERMANENT)
+            )
+            result = session.execute(stmt)
+            session.commit()
+            return result.rowcount
+            
+    updated_count = await asyncio.to_thread(_update_sync)
+    
+    if updated_count > 0:
+        logging.info(f"Помечено {updated_count} сообщений как необратимо проблемные (ERROR_PERMANENT)")
+
+
 async def main_logic(bot_for_posting: Bot | None):
     """
     Основная логика обработки и публикации сообщений.
@@ -454,6 +688,8 @@ async def main_logic(bot_for_posting: Bot | None):
     2. Делает паузу между этапами
     3. Публикует обработанные сообщения в Telegram каналы
        (если предоставлен бот и каналы настроены в базе данных)
+    4. Обрабатывает сообщения с ошибками
+    5. Помечает окончательно проблемные сообщения
     """
     
     logging.info("main_logic запущен")
@@ -505,6 +741,12 @@ async def main_logic(bot_for_posting: Bot | None):
         
         # Небольшая пауза между обработкой разных каналов
         await asyncio.sleep(1)
+    
+    # Этап 3: Обработка сообщений с ошибками
+    await process_error_messages()
+    
+    # Этап 4: Пометка окончательно проблемных сообщений
+    await mark_permanently_failed_messages()
 
 
 async def run_periodic_tasks(bot_for_posting: Bot | None):

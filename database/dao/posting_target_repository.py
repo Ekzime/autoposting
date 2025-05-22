@@ -43,19 +43,11 @@ class PostingTargetRepository:
             PostingTarget | None: Объект активной цели или None в случае ошибки
             
         Действия:
-            1. Деактивирует все существующие активные цели
-            2. Ищет запись с указанным chat_id
-            3. Обновляет существующую запись или создает новую
+            1. Ищет запись с указанным chat_id
+            2. Обновляет существующую запись или создает новую
         """
         try:
             with session_scope() as db:
-                # Деактивируем все существующие активные цели для постинга
-                db.execute(
-                    update(PostingTarget)
-                    .where(PostingTarget.is_active == True)
-                    .values(is_active=False)
-                )
-                
                 # Ищем запись с указанным chat_id
                 target_entry = db.execute(
                     select(PostingTarget).filter_by(target_chat_id=target_chat_id_str)
@@ -82,47 +74,50 @@ class PostingTargetRepository:
             logging.error(f"Error in set_active_target: {e}")
             return None
             
-    def get_active_target_info(self) -> Optional[Dict[str, Any]]:
+    def get_active_target_info(self) -> List[Dict[str, Any]]:
         """
-        Получает информацию об активной цели для постинга.
+        Получает информацию об активных целях для постинга.
         
         Returns:
-            Optional[Dict[str, Any]]: Словарь с информацией об активной цели или None
+            List[Dict[str, Any]]: Список словарей с информацией об активных целях или пустой список
             
         Действия:
-            1. Ищет запись с флагом is_active=True
-            2. Возвращает данные в виде словаря или None если цель не найдена
+            1. Ищет записи с флагом is_active=True
+            2. Возвращает данные в виде списка словарей или пустой список если цели не найдены
         """
         with session_scope() as db:
             try:
-                target = db.execute(
+                targets = db.execute(
                     select(PostingTarget).filter_by(is_active=True)
-                ).scalar_one_or_none()
+                ).scalars().all()
                 
-                if not target:
-                    return None
+                if not targets:
+                    return []
                     
-                return {
-                    "id": target.id,
-                    "target_chat_id": target.target_chat_id,
-                    "target_title": target.target_title,
-                    "is_active": target.is_active,
-                    "added_at": target.added_at.isoformat() if target.added_at else None
-                }
+                return [
+                    {
+                        "id": t.id,
+                        "target_chat_id": t.target_chat_id,
+                        "target_title": t.target_title,
+                        "is_active": t.is_active,
+                        "added_at": t.added_at.isoformat() if t.added_at else None
+                    }
+                    for t in targets
+                ]
             except Exception as e:
                 logging.error(f"Error in get_active_target_info: {e}")
-                return None
+                return []
                 
     def get_active_target_chat_id_str(self) -> Optional[str]:
         """
-        Получает ID чата активной цели для постинга.
+        Получает ID чата первой активной цели для постинга.
         
         Returns:
-            Optional[str]: ID чата активной цели или None если цель не найдена
+            Optional[str]: ID чата первой активной цели или None если цели не найдены
         """
-        active_target = self.get_active_target_info()
-        if active_target:
-            return active_target["target_chat_id"]
+        active_targets = self.get_active_target_info()
+        if active_targets and len(active_targets) > 0:
+            return active_targets[0]["target_chat_id"]
         return None
 
     def deactivate_target_by_id(self, target_chat_id_to_deactivate: str) -> bool:
@@ -211,27 +206,16 @@ class PostingTargetRepository:
             
         Returns:
             bool: True в случае успеха, False если цель не найдена или произошла ошибка
-            
-        Действия:
-            1. Деактивирует все существующие активные цели
-            2. Находит и активирует указанную цель
         """
         with session_scope() as db:
             try:
-                # Затем ищем и активируем нужный канал
+                # Ищем и активируем нужный канал
                 target = db.execute(
                     select(PostingTarget).where(PostingTarget.target_chat_id == target_chat_id_str)
                 ).scalar_one_or_none()
                 
                 if not target:
                     return False
-
-                # Сначала деактивируем все активные каналы
-                db.execute(
-                    update(PostingTarget)
-                    .where(PostingTarget.is_active == True)
-                    .values(is_active=False)
-                )
                 
                 target.is_active = True
                 return True
