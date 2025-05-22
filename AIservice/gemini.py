@@ -3,7 +3,7 @@
 #------------------------------
 import re
 import json
-from typing import List
+from typing import List, Optional, Dict, Any, Union
 ###############################
 #           my moduls
 #------------------------------
@@ -27,6 +27,7 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 # Модель для валидации входных данных
 class PostBatch(BaseModel):
     posts: List[str]
+    has_image: Optional[bool] = False
 
 # Инициализация FastAPI приложения
 app = FastAPI()
@@ -41,13 +42,19 @@ app.add_middleware(
 
 
 # Функция обработки постов через Gemini API
-def process_posts(posts: list[str], prompt_template: str = prompt) -> list[str]:
+def process_posts(posts: list[str], has_image: bool = False, prompt_template: str = prompt) -> list[str]:
     # Формируем промпт, добавляя посты в виде списка
-    prompt = prompt_template + "\n\n" + "\n".join(f"- {p}" for p in posts)
+    content = prompt_template + "\n\n"
+    
+    # Добавляем информацию о наличии изображения
+    if has_image:
+        content += "ВАЖНО: К сообщению прикреплено изображение, которое будет автоматически добавлено в пост.\n\n"
+    
+    content += "\n".join(f"- {p}" for p in posts)
 
     try:
         # Отправляем запрос к Gemini API
-        response = model.generate_content(prompt)
+        response = model.generate_content(content)
         raw = response.text.strip()
 
         # Выводим сырой ответ для отладки
@@ -77,7 +84,7 @@ def process_posts(posts: list[str], prompt_template: str = prompt) -> list[str]:
 @app.post('/gemini/filter')
 async def multi_filter(data: PostBatch):
     # Обрабатываем посты и возвращаем результат
-    result = process_posts(posts=data.posts)
+    result = process_posts(posts=data.posts, has_image=data.has_image)
     return {
         'status': 'success',
         'result': result,

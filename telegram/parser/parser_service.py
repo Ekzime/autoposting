@@ -26,7 +26,7 @@ from config import settings
 # Импорт DB-функций
 from database.repositories import parsing_telegram_acc_repository, parsing_source_repository
 from database.channels import add_channel, get_channel_by_peer_id
-from database.messages import add_message
+from database.messages import add_message, update_message_photo_path
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -225,32 +225,38 @@ async def handle_new_message(event):
                 logger.error(f"Ошибка при добавлении канала: {e}")
                 return
         
-        # Обрабатываем фото
-        photo_path = None
-        if message.photo and PHOTO_STORAGE:
-            try:
-                photo_path = os.path.join(PHOTO_STORAGE, f"{message.id}.jpg")
-                await asyncio.wait_for(message.download_media(photo_path), timeout=20)
-                logger.info(f"Photo saved to {photo_path}")
-            except Exception as e:
-                logger.error(f"Ошибка при скачивании фото: {e}")
-                photo_path = None
-        
         # Получаем ссылки и просмотры
         links = check_message_for_links(message)
         views = await get_message_views(client, message)
         
-        # Добавляем сообщение в БД
-        await asyncio.to_thread(
+        # Сначала добавляем сообщение в БД без фото
+        db_message_id = await asyncio.to_thread(
             add_message,
             channel_id=channel_id,
             message_id=message.id,
             text=message.text,
             date=message.date,
-            photo_path=photo_path,
+            photo_path=None,  # Сначала без фото
             links=links,
             views=views
         )
+        
+        # Обрабатываем фото и обновляем путь в БД если есть
+        if message.photo and PHOTO_STORAGE:
+            try:
+                # Используем ID из базы данных вместо message.id для имени файла
+                photo_path = os.path.join(PHOTO_STORAGE, f"{db_message_id}.jpg")
+                await asyncio.wait_for(message.download_media(photo_path), timeout=20)
+                logger.info(f"Photo saved to {photo_path}")
+                
+                # Обновляем путь к фото в БД
+                await asyncio.to_thread(
+                    update_message_photo_path,
+                    message_id=db_message_id,
+                    photo_path=photo_path
+                )
+            except Exception as e:
+                logger.error(f"Ошибка при скачивании фото: {e}")
         
         TOTAL_HANDLED += 1
         logger.info(f"Обработано сообщение ID: {message.id}, всего: {TOTAL_HANDLED}")

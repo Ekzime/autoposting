@@ -7,6 +7,7 @@ import logging # Для логирования
 from datetime import datetime  # Для работы с датой и временем
 
 from aiogram import Bot  
+from aiogram.types import FSInputFile  # Для отправки файлов в Aiogram 3.x
 
 # SQLAlchemy для работы с базой данных
 from sqlalchemy.orm import sessionmaker  # Для создания сессий БД
@@ -62,8 +63,9 @@ async def post_message_to_telegram(
     Действия:
     1. Проверяет наличие всех необходимых данных (бот, ID канала, текст)
     2. Пытается преобразовать ID канала в число, если не получается - использует как строку
-    3. Отправляет сообщение через бота
-    4. Логирует результат отправки
+    3. Проверяет наличие изображения для сообщения
+    4. Отправляет сообщение через бота (с изображением, если оно есть)
+    5. Логирует результат отправки
     """
     
     if not all([bot, channel_id_str, text_to_post]): # message_db_id для лога, не для основной логики отправки
@@ -84,8 +86,28 @@ async def post_message_to_telegram(
     # --- КОНЕЦ ДИАГНОСТИКИ ---
 
     try:
-        logging.info(f"ID {message_db_id}: Отправка в Telegram. chat_id={chat_id_for_send}, text='{text_to_post[:30]}...'")
-        await bot.send_message(chat_id=chat_id_for_send, text=text_to_post) # Используем chat_id_for_send
+        # Проверка наличия изображения
+        photo_path = f"database/photos/{message_db_id}.jpg"
+        has_photo = os.path.exists(photo_path)
+        
+        if has_photo:
+            logging.info(f"ID {message_db_id}: Найдено изображение: {photo_path}")
+            # Отправляем сообщение с фото
+            logging.info(f"ID {message_db_id}: Отправка в Telegram с фото. chat_id={chat_id_for_send}, text='{text_to_post[:30]}...'")
+            
+            # Используем FSInputFile вместо открытия файла напрямую
+            photo = FSInputFile(photo_path)
+            await bot.send_photo(
+                chat_id=chat_id_for_send,
+                photo=photo,
+                caption=text_to_post
+            )
+        else:
+            # Отправляем сообщение без фото
+            logging.info(f"ID {message_db_id}: Изображение не найдено, отправка только текста")
+            logging.info(f"ID {message_db_id}: Отправка в Telegram. chat_id={chat_id_for_send}, text='{text_to_post[:30]}...'")
+            await bot.send_message(chat_id=chat_id_for_send, text=text_to_post)
+            
         logging.info(f"ID {message_db_id}: Сообщение УСПЕШНО отправлено в Telegram канал '{chat_id_for_send}'.")
         return True
     except Exception as e:
@@ -265,46 +287,68 @@ async def _fetch_ai_response(message_id: int, text_to_process: str, service_url:
         str | None: Обработанный AI текст или None в случае ошибки/пустого ответа
         
     Действия:
-    1. Отправляет POST запрос в AI сервис с текстом
-    2. Получает и проверяет ответ от сервиса
-    3. Извлекает обработанный текст из ответа
-    4. Логирует результаты
+    1. Проверяет наличие изображения для сообщения
+    2. Отправляет POST запрос в AI сервис с текстом и информацией об изображении
+    3. Получает и проверяет ответ от сервиса
+    4. Извлекает обработанный текст из ответа
+    5. Логирует результаты
     """
     
     logging.info(f"ID {message_id}: Отправка в AI ({service_url}): {text_to_process[:30]}...")
     
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        # Отправка запроса в AI сервис
-        payload = {"posts": [text_to_process]}
-        response = await client.post(service_url, json=payload)
-        response.raise_for_status()
-
-    response_json = response.json()
-    processed_text = None
-
-    # Обработка ответа от AI
-    if (response_json and 
-        isinstance(response_json, dict) and 
-        response_json.get("status") == "success"):
-        
-        ai_result_list = response_json.get("result")
-        
-        if ai_result_list and isinstance(ai_result_list, list) and ai_result_list:
-            first_item = ai_result_list[0]
-            
-            if isinstance(first_item, dict) and "text" in first_item:
-                processed_text = first_item.get("text")
-            elif isinstance(first_item, str):
-                processed_text = first_item
-            
-            if not processed_text:
-                processed_text = None 
+    # Проверяем наличие изображения
+    photo_path = f"database/photos/{message_id}.jpg"
+    has_photo = os.path.exists(photo_path)
     
-    logging.info(
-        f"ID {message_id}: Ответ от AI: "
-        f"{processed_text[:50] if processed_text else 'Нет текста (или пустой список от AI)'}"
-    )
-    return processed_text
+    # Добавляем информацию о наличии изображения в запрос
+    payload = {
+        "posts": [text_to_process],
+        "has_image": has_photo
+    }
+    
+    if has_photo:
+        logging.info(f"ID {message_id}: Сообщение содержит изображение, эта информация добавлена в запрос к AI")
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Делаем запрос к API
+            response = await client.post(service_url, json=payload)
+            
+            # Проверяем статус ответа
+            if response.status_code != 200:
+                logging.error(f"ID {message_id}: Ошибка при запросе к AI: {response.status_code} - {response.text}")
+                return None
+                
+            # Получаем данные из ответа
+            response_data = response.json()
+            
+            # Проверяем структуру ответа
+            if not response_data.get('status') == 'success' or 'result' not in response_data:
+                logging.error(f"ID {message_id}: Некорректный ответ от AI: {response_data}")
+                return None
+                
+            # Получаем результаты
+            result = response_data['result']
+            
+            # Проверяем, что результат непустой
+            if not result or len(result) == 0:
+                logging.info(f"ID {message_id}: AI вернул пустой результат - пост отфильтрован как нерелевантный")
+                return None
+                
+            # Извлекаем обработанный текст
+            processed_text = result[0].get('text', '') if isinstance(result, list) and len(result) > 0 else ''
+            
+            # Проверяем, что обработанный текст не пустой и достаточно содержательный
+            if not processed_text or len(processed_text) < 10:
+                logging.info(f"ID {message_id}: AI вернул слишком короткий результат ({len(processed_text) if processed_text else 0} символов) - пост отфильтрован")
+                return None
+                
+            logging.info(f"ID {message_id}: AI успешно обработал пост: {processed_text[:30]}...")
+            return processed_text
+            
+    except Exception as e:
+        logging.error(f"ID {message_id}: Ошибка при запросе к AI: {e}", exc_info=True)
+        return None
 
 
 async def simplified_process_message(message_id: int, original_text: str):

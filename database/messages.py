@@ -7,7 +7,7 @@ from datetime import datetime
 
 
 
-def add_message(channel_id, message_id, text, date, photo_path, links, views) -> None:
+def add_message(channel_id, message_id, text, date, photo_path, links, views) -> int | None:
     with Session(engine) as connection:
         # Проверяем наличие сообщения по message_id без привязки к channel_id
         query = select(Messages).where(
@@ -26,32 +26,35 @@ def add_message(channel_id, message_id, text, date, photo_path, links, views) ->
             # Если совпадает и channel_id и message_id, это дубликат
             if msg.channel_id == channel_id:
                 print(f"message: id:{message_id} already exist for channel {channel_id}")
-                return
+                return msg.id  # Возвращаем ID существующего сообщения
             
             # Возможно, канал хранится с другим ID, но это то же сообщение
             # Проверяем текст и дату для подтверждения
             if msg.text == text and msg.date == date:
                 print(f"message: id:{message_id} уже существует с другим channel_id")
-                return
+                return msg.id  # Возвращаем ID существующего сообщения
         
         try:
-            connection.add(
-                Messages(
-                    channel_id = channel_id,
-                    message_id = message_id,
-                    text = text,
-                    length = len(text),
-                    date = date,
-                    photo_path = photo_path,
-                    links = links,
-                    views = views
-                )
+            new_message = Messages(
+                channel_id = channel_id,
+                message_id = message_id,
+                text = text,
+                length = len(text) if text else 0,
+                date = date,
+                photo_path = photo_path,
+                links = links,
+                views = views
             )
+            connection.add(new_message)
             connection.commit()
             print(f"Added new row to Messages\n     chat: {channel_id}\n    message: {message_id}")
+            
+            # Получаем ID добавленного сообщения
+            return new_message.id
         except Exception as e:
             connection.rollback()
             print(f"Error adding message: {e}")
+            return None
 
 
 def get_all_messages() -> list[Messages]:
@@ -109,6 +112,36 @@ def get_message_by_text(target_text: str) -> list[Messages] | None:
         query: Select = select(Messages).where(Messages.text.contains(target_text))
         messages: list[Messages] = connection.scalars(query).all()
         return sorted(messages, key=lambda x: x.date)
+
+
+def update_message_photo_path(message_id: int, photo_path: str) -> bool:
+    """
+    Обновляет путь к фотографии для сообщения по ID.
+    
+    Args:
+        message_id (int): ID сообщения в БД
+        photo_path (str): Путь к фотографии
+        
+    Returns:
+        bool: True если обновление успешно, False в случае ошибки
+    """
+    with Session(engine) as connection:
+        try:
+            # Получаем сообщение по ID
+            message = connection.get(Messages, message_id)
+            if not message:
+                print(f"Сообщение с ID {message_id} не найдено")
+                return False
+                
+            # Обновляем путь к фото
+            message.photo_path = photo_path
+            connection.commit()
+            print(f"Обновлен путь к фото для сообщения ID {message_id}: {photo_path}")
+            return True
+        except Exception as e:
+            connection.rollback()
+            print(f"Ошибка при обновлении пути к фото: {e}")
+            return False
 
 
 def clear_messages_table() -> None:
