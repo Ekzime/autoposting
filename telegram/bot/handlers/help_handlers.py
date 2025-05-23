@@ -1,5 +1,6 @@
 import logging
-from aiogram import Router
+import httpx
+from aiogram import Router, Bot
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -7,6 +8,7 @@ from aiogram.fsm.state import StatesGroup, State
 
 from sqlalchemy import select
 from database.models import SessionLocal, Messages, NewsStatus
+from config import settings
 
 # Настройка логгера
 logger = logging.getLogger(__name__)
@@ -63,8 +65,14 @@ async def cmd_help(message: Message):
 <b>🛠️ Управление сообщениями с ошибками:</b>
 /errors - просмотр и управление сообщениями с ошибками
 
+<b>🤖 Управление AI сервисом:</b>
+/clear_ai_cache - очистить кеш дубликатов AI
+/ai_cache_stats - статистика кеша AI сервиса
+
 <b>⚙️ Сервисные команды:</b>
 /help, /commands - показать этот список команд
+/add_bot_to_channel - инструкции по добавлению бота в канал
+/check_channel - проверить доступность канала
 /cancel - отменить текущую операцию
 
 Используйте ID, указанные в списках при просмотре аккаунтов, источников и целевых каналов.
@@ -223,7 +231,6 @@ async def cmd_add_bot_to_channel(message: Message):
     bot_username = "Ваш_бот"  # Значение по умолчанию
     
     try:
-        from aiogram import Bot
         bot = Bot(token=bot_token)
         bot_info = await bot.get_me()
         bot_username = f"@{bot_info.username}"
@@ -570,4 +577,82 @@ async def mark_message_permanent(message_id):
             return True
     
     import asyncio
-    return await asyncio.to_thread(_update_sync) 
+    return await asyncio.to_thread(_update_sync)
+
+
+@router.message(Command("clear_ai_cache"))
+async def cmd_clear_ai_cache(message: Message):
+    """
+    Обработчик команды /clear_ai_cache для очистки кеша дубликатов AI сервиса
+    
+    Args:
+        message (Message): Сообщение от пользователя
+    """
+    try:
+        # Отправляем запрос к AI сервису для очистки кеша
+        ai_service_url = settings.ai_service.api_url
+        if not ai_service_url:
+            await message.answer("❌ AI сервис не настроен в конфигурации.")
+            return
+            
+        # Формируем URL для очистки кеша
+        clear_cache_url = ai_service_url.replace('/filter', '/clear_cache')
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(clear_cache_url)
+            
+            if response.status_code == 200:
+                result = response.json()
+                message_text = f"✅ {result.get('message', 'Кеш AI сервиса успешно очищен')}"
+                await message.answer(message_text)
+                logger.info(f"Кеш AI сервиса очищен пользователем {message.from_user.id}")
+            else:
+                await message.answer(f"❌ Ошибка при очистке кеша: HTTP {response.status_code}")
+                
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при подключении к AI сервису: {str(e)}")
+        logger.error(f"Ошибка при очистке кеша AI: {e}")
+
+
+@router.message(Command("ai_cache_stats"))
+async def cmd_ai_cache_stats(message: Message):
+    """
+    Обработчик команды /ai_cache_stats для получения статистики кеша AI сервиса
+    
+    Args:
+        message (Message): Сообщение от пользователя
+    """
+    try:
+        # Отправляем запрос к AI сервису для получения статистики
+        ai_service_url = settings.ai_service.api_url
+        if not ai_service_url:
+            await message.answer("❌ AI сервис не настроен в конфигурации.")
+            return
+            
+        # Формируем URL для получения статистики
+        stats_url = ai_service_url.replace('/filter', '/cache_stats')
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(stats_url)
+            
+            if response.status_code == 200:
+                result = response.json()
+                cache_size = result.get('cache_size', 0)
+                
+                stats_text = f"""
+📊 <b>Статистика кеша AI сервиса</b>
+
+🗃️ Размер кеша: {cache_size} записей
+📝 Это количество уникальных постов, которые уже были обработаны
+
+💡 Кеш помогает избежать дубликатов контента
+🧹 Используйте /clear_ai_cache для очистки кеша при необходимости
+"""
+                await message.answer(stats_text, parse_mode="HTML")
+                logger.info(f"Статистика кеша AI запрошена пользователем {message.from_user.id}")
+            else:
+                await message.answer(f"❌ Ошибка при получении статистики: HTTP {response.status_code}")
+                
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при подключении к AI сервису: {str(e)}")
+        logger.error(f"Ошибка при получении статистики кеша AI: {e}") 

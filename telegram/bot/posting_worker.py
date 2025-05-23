@@ -1,10 +1,10 @@
-# avtoposting/telegram/posting_worker.py
-
 import os # Для работы с переменными окружения и файловой системой
 import httpx # HTTP клиент для асинхронных запросов
 import asyncio # Для асинхронного программирования
 import logging # Для логирования
-from datetime import datetime  # Для работы с датой и временем
+import hashlib # Для генерации хешей контента
+import re # Для работы с регулярными выражениями
+from datetime import datetime, timedelta  # Для работы с датой и временем
 
 from aiogram import Bot  
 from aiogram.types import FSInputFile  # Для отправки файлов в Aiogram 3.x
@@ -431,6 +431,62 @@ async def _fetch_ai_response(message_id: int, text_to_process: str, service_url:
         return None
 
 
+def generate_content_hash(text: str) -> str:
+    """Генерирует хеш для текста, игнорируя пунктуацию и регистр"""
+    if not text:
+        return ""
+    # Приводим к нижнему регистру и удаляем лишние символы
+    normalized = re.sub(r'[^\w\s]', '', text.lower())
+    # Удаляем лишние пробелы
+    normalized = ' '.join(normalized.split())
+    return hashlib.md5(normalized.encode()).hexdigest()
+
+
+async def check_content_duplicate_in_db(content: str, target_channel_id: str = None, hours_back: int = 24) -> bool:
+    """
+    Проверяет, не был ли уже опубликован похожий контент в последние N часов
+    
+    Args:
+        content (str): Текст для проверки
+        target_channel_id (str): ID целевого канала (опционально)
+        hours_back (int): Количество часов назад для проверки (по умолчанию 24)
+        
+    Returns:
+        bool: True если дубликат найден, False если контент уникален
+    """
+    if not content:
+        return False
+        
+    content_hash = generate_content_hash(content)
+    if not content_hash:
+        return False
+    
+    def _check_sync():
+        with SessionLocal() as session:
+            # Создаем базовый запрос
+            query = select(Messages).where(
+                Messages.status == NewsStatus.POSTED,
+                Messages.date >= datetime.now() - timedelta(hours=hours_back)
+            )
+            
+            # Если указан конкретный канал, фильтруем по нему
+            if target_channel_id:
+                query = query.where(Messages.target_channel_id == target_channel_id)
+            
+            posted_messages = session.execute(query).scalars().all()
+            
+            # Проверяем хеши опубликованных сообщений
+            for msg in posted_messages:
+                if msg.ai_processed_text:
+                    existing_hash = generate_content_hash(msg.ai_processed_text)
+                    if existing_hash == content_hash:
+                        logging.info(f"Найден дубликат: сообщение ID {msg.id} имеет похожий контент")
+                        return True
+            return False
+    
+    return await asyncio.to_thread(_check_sync)
+
+
 async def simplified_process_message(message_id: int, original_text: str):
     """
     Упрощенная обработка сообщения через AI сервис.
@@ -443,8 +499,9 @@ async def simplified_process_message(message_id: int, original_text: str):
     1. Проверяет входные данные (текст и URL AI сервиса)
     2. Обновляет статус на "отправляется в AI"
     3. Отправляет текст в AI сервис через _fetch_ai_response()
-    4. Обрабатывает возможные ошибки (сеть, HTTP, прочие)
-    5. Обновляет статус и результат в БД
+    4. Проверяет на дубликаты в базе данных
+    5. Обрабатывает возможные ошибки (сеть, HTTP, прочие)
+    6. Обновляет статус и результат в БД
     
     Raises:
         httpx.RequestError: При ошибках сети
@@ -478,9 +535,18 @@ async def simplified_process_message(message_id: int, original_text: str):
             AI_SERVICE_URL
         )
 
-        # Определение финального статуса
+        # Проверка результата AI
         if processed_text_from_ai:
-            new_status = NewsStatus.AI_PROCESSED
+            # Проверяем на дубликаты в базе данных
+            is_duplicate = await check_content_duplicate_in_db(processed_text_from_ai)
+            
+            if is_duplicate:
+                logging.info(f"ID {message_id}: AI обработал текст, но он является дубликатом уже опубликованного контента")
+                new_status = NewsStatus.ERROR_AI_PROCESSING
+                processed_text_from_ai = "Контент отфильтрован как дубликат"
+            else:
+                new_status = NewsStatus.AI_PROCESSED
+                logging.info(f"ID {message_id}: Контент уникален, готов к публикации")
         else:
             new_status = NewsStatus.ERROR_AI_PROCESSING
             processed_text_from_ai = "AI не вернул текст"
@@ -507,18 +573,10 @@ async def simplified_process_message(message_id: int, original_text: str):
         )
         new_status = NewsStatus.ERROR_AI_PROCESSING
         processed_text_from_ai = f"Ошибка: {str(e)[:100]}"
-        
-    finally:
-        # Финальное обновление статуса
-        await _update_message_status(
-            message_id,
-            new_status,
-            processed_text_from_ai
-        )
-        logging.info(
-            f"ID {message_id}: Финальный статус в БД: {new_status.value}, "
-            "Результат AI сохранен."
-        )
+
+    # Финальное обновление статуса
+    await _update_message_status(message_id, new_status, processed_text_from_ai)
+    logging.info(f"ID {message_id}: Обработка завершена. Статус: {new_status.value}")
 
 
 async def get_messages_with_errors(limit: int = 2, max_retry_count: int = 3) -> list[Messages]:
