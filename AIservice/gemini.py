@@ -4,6 +4,8 @@
 import re
 import json
 import hashlib
+import asyncio
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any, Union
 ###############################
 #           my moduls
@@ -27,6 +29,7 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 
 # Глобальный кеш для отслеживания уже обработанных постов
 processed_content_hashes = set()
+last_cache_clear = datetime.now()
 
 # Модель для валидации входных данных
 class PostBatch(BaseModel):
@@ -43,6 +46,26 @@ app.add_middleware(
     allow_headers=    ["*"],  # Разрешаем все заголовки
     allow_credentials=True,   # Разрешаем передачу учетных данных
 )
+
+
+def check_and_auto_clear_cache():
+    """Проверяет и автоматически очищает кеш если прошло 24 часа"""
+    global processed_content_hashes, last_cache_clear
+    
+    current_time = datetime.now()
+    hours_passed = (current_time - last_cache_clear).total_seconds() / 3600
+    
+    if hours_passed >= 24:
+        cache_size_before = len(processed_content_hashes)
+        processed_content_hashes.clear()
+        last_cache_clear = current_time
+        
+        print(f"🔄 Автоматическая очистка кеша: удалено {cache_size_before} записей")
+        print(f"⏰ Следующая очистка через 24 часа: {(current_time + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        return True
+    
+    return False
 
 
 def generate_content_hash(text: str) -> str:
@@ -64,6 +87,9 @@ def filter_duplicate_results(results: List[Dict]) -> List[Dict]:
     """Фильтрует дубликаты из результатов AI"""
     if not results:
         return results
+    
+    # Проверяем автоочистку кеша перед фильтрацией
+    check_and_auto_clear_cache()
     
     filtered_results = []
     session_hashes = set()
@@ -89,6 +115,9 @@ def filter_duplicate_results(results: List[Dict]) -> List[Dict]:
 
 # Функция обработки постов через Gemini API
 def process_posts(posts: list[str], has_image: bool = False, prompt_template: str = prompt) -> list[str]:
+    # Проверяем автоочистку кеша
+    check_and_auto_clear_cache()
+    
     # Проверяем на дубликаты на входе
     unique_posts = []
     for post in posts:
@@ -166,12 +195,13 @@ async def multi_filter(data: PostBatch):
 @app.post('/gemini/clear_cache')
 async def clear_duplicate_cache():
     """Очищает кеш дубликатов"""
-    global processed_content_hashes
+    global processed_content_hashes, last_cache_clear
     cache_size = len(processed_content_hashes)
     processed_content_hashes.clear()
+    last_cache_clear = datetime.now()
     return {
         'status': 'success',
-        'message': f'Кеш очищен. Удалено {cache_size} записей.'
+        'message': f'Кеш очищен вручную. Удалено {cache_size} записей.'
     }
 
 
@@ -179,8 +209,39 @@ async def clear_duplicate_cache():
 @app.get('/gemini/cache_stats')
 async def get_cache_stats():
     """Возвращает статистику кеша"""
+    current_time = datetime.now()
+    hours_since_clear = (current_time - last_cache_clear).total_seconds() / 3600
+    hours_until_clear = max(0, 24 - hours_since_clear)
+    
     return {
         'status': 'success',
         'cache_size': len(processed_content_hashes),
-        'recent_hashes': list(processed_content_hashes)[-10:] if processed_content_hashes else []
+        'recent_hashes': list(processed_content_hashes)[-10:] if processed_content_hashes else [],
+        'last_auto_clear': last_cache_clear.strftime('%Y-%m-%d %H:%M:%S'),
+        'hours_since_clear': round(hours_since_clear, 1),
+        'hours_until_next_clear': round(hours_until_clear, 1),
+        'next_auto_clear': (last_cache_clear + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M:%S')
     }
+
+
+# Эндпоинт для принудительного запуска автоочистки
+@app.post('/gemini/force_auto_clear')
+async def force_auto_clear():
+    """Принудительно запускает автоочистку кеша"""
+    global last_cache_clear
+    # Устанавливаем время последней очистки на 25 часов назад
+    last_cache_clear = datetime.now() - timedelta(hours=25)
+    
+    # Запускаем проверку автоочистки
+    was_cleared = check_and_auto_clear_cache()
+    
+    if was_cleared:
+        return {
+            'status': 'success',
+            'message': 'Автоочистка кеша выполнена принудительно'
+        }
+    else:
+        return {
+            'status': 'error',
+            'message': 'Ошибка при выполнении автоочистки'
+        }

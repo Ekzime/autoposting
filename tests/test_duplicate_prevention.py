@@ -13,6 +13,7 @@ logging.basicConfig(
 API_URL = "http://localhost:8000/gemini/filter"
 CLEAR_CACHE_URL = "http://localhost:8000/gemini/clear_cache"
 STATS_URL = "http://localhost:8000/gemini/cache_stats"
+FORCE_AUTO_CLEAR_URL = "http://localhost:8000/gemini/force_auto_clear"
 
 
 async def test_duplicate_prevention():
@@ -116,9 +117,80 @@ async def test_batch_processing():
         logging.info(f"Из {len(batch_posts)} постов получили {result_count} уникальных")
 
 
+async def test_auto_clear_functionality():
+    """Тестирует функциональность автоматической очистки кеша."""
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        logging.info("\n=== ТЕСТ АВТООЧИСТКИ КЕША ===")
+        
+        # 1. Очищаем кеш и добавляем тестовые данные
+        await client.post(CLEAR_CACHE_URL)
+        
+        # Добавляем несколько записей в кеш
+        test_posts = [
+            "Тестовая новость 1",
+            "Тестовая новость 2", 
+            "Тестовая новость 3"
+        ]
+        
+        for post in test_posts:
+            payload = {"posts": [post], "has_image": False}
+            await client.post(API_URL, json=payload)
+        
+        # 2. Проверяем статистику до автоочистки
+        stats_before = await client.get(STATS_URL)
+        stats_before_data = stats_before.json()
+        cache_size_before = stats_before_data.get('cache_size', 0)
+        
+        logging.info(f"Размер кеша до автоочистки: {cache_size_before}")
+        logging.info(f"Часов до следующей очистки: {stats_before_data.get('hours_until_next_clear', 0)}")
+        
+        # 3. Принудительно запускаем автоочистку
+        logging.info("Запускаем принудительную автоочистку...")
+        force_clear_response = await client.post(FORCE_AUTO_CLEAR_URL)
+        
+        if force_clear_response.status_code == 200:
+            result = force_clear_response.json()
+            logging.info(f"✅ Автоочистка: {result.get('message', 'Выполнена')}")
+        else:
+            logging.error(f"❌ Ошибка автоочистки: HTTP {force_clear_response.status_code}")
+            return
+        
+        # 4. Проверяем статистику после автоочистки
+        stats_after = await client.get(STATS_URL)
+        stats_after_data = stats_after.json()
+        cache_size_after = stats_after_data.get('cache_size', 0)
+        
+        logging.info(f"Размер кеша после автоочистки: {cache_size_after}")
+        logging.info(f"Часов до следующей очистки: {stats_after_data.get('hours_until_next_clear', 0)}")
+        
+        # 5. Анализируем результат
+        if cache_size_before > 0 and cache_size_after == 0:
+            logging.info("✅ АВТООЧИСТКА РАБОТАЕТ: Кеш был очищен")
+        else:
+            logging.error(f"❌ АВТООЧИСТКА НЕ РАБОТАЕТ: До {cache_size_before}, После {cache_size_after}")
+        
+        # 6. Проверяем, что новые записи добавляются после очистки
+        test_post_after_clear = "Новая запись после очистки кеша"
+        payload = {"posts": [test_post_after_clear], "has_image": False}
+        await client.post(API_URL, json=payload)
+        
+        final_stats = await client.get(STATS_URL)
+        final_stats_data = final_stats.json()
+        final_cache_size = final_stats_data.get('cache_size', 0)
+        
+        if final_cache_size > 0:
+            logging.info("✅ После очистки кеш снова работает корректно")
+        else:
+            logging.error("❌ После очистки кеш не работает")
+
+
 if __name__ == "__main__":
     logging.info("Запуск тестов предотвращения дубликатов...")
     asyncio.run(test_duplicate_prevention())
     
     logging.info("\nЗапуск теста batch обработки...")
-    asyncio.run(test_batch_processing()) 
+    asyncio.run(test_batch_processing())
+    
+    logging.info("\nЗапуск теста автоочистки кеша...")
+    asyncio.run(test_auto_clear_functionality()) 
