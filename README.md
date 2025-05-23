@@ -208,7 +208,6 @@ TELEGRAM_API_HASH=your_api_hash
 
 # Telegram Bot Token (получить у @BotFather)
 TELEGRAM_BOT_TOKEN=your_bot_token
-TELEGRAM_BOT_TOKEN_MAIN=your_main_bot_token
 
 # Google Gemini API (получить на https://ai.google.dev)
 GEMINI_API_KEY=your_gemini_api_key
@@ -218,9 +217,6 @@ AI_SERVICE_URL=http://localhost:8000/gemini/filter
 
 # Database (PostgreSQL)
 DATABASE_URL=postgresql://user:password@localhost:5432/autoposting
-
-# Phone number для парсера
-PHONE_NUMBER=+1234567890
 ```
 
 ### 5. **Настройка базы данных**
