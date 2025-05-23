@@ -245,3 +245,21 @@ async def force_auto_clear():
             'status': 'error',
             'message': 'Ошибка при выполнении автоочистки'
         }
+
+
+# Health check эндпоинт для мониторинга состояния сервиса
+@app.get('/health')
+async def health_check():
+    """Возвращает состояние здоровья AI сервиса"""
+    current_time = datetime.now()
+    hours_since_clear = (current_time - last_cache_clear).total_seconds() / 3600
+    
+    return {
+        'status': 'healthy',
+        'timestamp': current_time.isoformat(),
+        'cache_size': len(processed_content_hashes),
+        'gemini_model': 'gemini-1.5-flash',
+        'last_cache_clear': last_cache_clear.isoformat(),
+        'hours_since_clear': round(hours_since_clear, 1),
+        'version': '1.0.0'
+    }
