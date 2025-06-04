@@ -43,6 +43,28 @@ logging.info("posting_worker.py загружен")
 # Глобальные переменные
 last_targets_check = datetime.now()  # Время последней проверки целевых каналов
 
+
+def create_promotional_block() -> str:
+    """
+    Создает рекламный блок для добавления в конец каждого сообщения.
+    Использует настройки из конфигурации для гибкой настройки.
+    
+    Returns:
+        str: Форматированный рекламный блок с встроенными ссылками или пустая строка, если отключен
+    """
+    # Проверяем, включен ли рекламный блок
+    if not settings.telegram_bot.promo_enabled:
+        return ""
+    
+    promo_block = (
+        f"\n\n{settings.telegram_bot.promo_title}\n"
+        f'<a href="{settings.telegram_bot.promo_crypto_url}">{settings.telegram_bot.promo_crypto_text}</a> '
+        f'<a href="{settings.telegram_bot.promo_forex_url}">{settings.telegram_bot.promo_forex_text}</a> '
+        f'<a href="{settings.telegram_bot.promo_news_url}">{settings.telegram_bot.promo_news_text}</a>'
+    )
+    return promo_block
+
+
 async def check_bot_in_channel(bot: Bot, channel_id: str | int) -> bool:
     """
     Проверяет, является ли бот участником канала.
@@ -139,13 +161,18 @@ async def post_message_to_telegram(
             await bot.send_photo(
                 chat_id=chat_id_for_send,
                 photo=photo,
-                caption=text_to_post
+                caption=text_to_post + create_promotional_block(),
+                parse_mode="HTML"
             )
         else:
             # Отправляем сообщение без фото
             logging.info(f"ID {message_db_id}: Изображение не найдено, отправка только текста")
             logging.info(f"ID {message_db_id}: Отправка в Telegram. chat_id={chat_id_for_send}, text='{text_to_post[:30]}...'")
-            await bot.send_message(chat_id=chat_id_for_send, text=text_to_post)
+            await bot.send_message(
+                chat_id=chat_id_for_send, 
+                text=text_to_post + create_promotional_block(),
+                parse_mode="HTML"
+            )
             
         logging.info(f"ID {message_db_id}: Сообщение УСПЕШНО отправлено в Telegram канал '{chat_id_for_send}'.")
         return True

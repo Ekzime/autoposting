@@ -17,6 +17,16 @@ class TelegramBotSettings(BaseModel):
     bot_token: str  # Токен бота Telegram
     bot_token_main: Optional[str] = None  # Опциональный основной токен бота
     
+    # Настройки рекламного блока
+    promo_enabled: bool = True  # Включить/выключить рекламный блок
+    promo_title: str = "———Подписаться———"  # Заголовок рекламного блока
+    promo_crypto_text: str = "Крипто."  # Текст для крипто-канала
+    promo_crypto_url: str = "https://t.me/+OWWu9brDBI41Yjgy"  # URL крипто-канала
+    promo_forex_text: str = "Форекс."  # Текст для форекс-канала
+    promo_forex_url: str = "https://t.me/+cjGt046qe_1kMzFi"  # URL форекс-канала
+    promo_news_text: str = "Новости."  # Текст для новостного канала
+    promo_news_url: str = "https://t.me/+T2sxJEJj2343Y2Ji"  # URL новостного канала
+    
     model_config = ConfigDict(extra="allow")
 
 
@@ -90,7 +100,16 @@ class Settings(BaseSettings):
             # Настройки для бота Telegram
             telegram_bot = TelegramBotSettings(
                 bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-                bot_token_main=os.getenv("TELEGRAM_BOT_TOKEN_MAIN")
+                bot_token_main=os.getenv("TELEGRAM_BOT_TOKEN_MAIN"),
+                # Настройки рекламного блока
+                promo_enabled=os.getenv("PROMO_ENABLED", "true").lower() in ("true", "1", "yes"),
+                promo_title=os.getenv("PROMO_TITLE", "———Подписаться———"),
+                promo_crypto_text=os.getenv("PROMO_CRYPTO_TEXT", "Крипто."),
+                promo_crypto_url=os.getenv("PROMO_CRYPTO_URL", "https://t.me/+OWWu9brDBI41Yjgy"),
+                promo_forex_text=os.getenv("PROMO_FOREX_TEXT", "Форекс."),
+                promo_forex_url=os.getenv("PROMO_FOREX_URL", "https://t.me/+cjGt046qe_1kMzFi"),
+                promo_news_text=os.getenv("PROMO_NEWS_TEXT", "Новости."),
+                promo_news_url=os.getenv("PROMO_NEWS_URL", "https://t.me/+T2sxJEJj2343Y2Ji")
             )
             
             # API настройки Telegram

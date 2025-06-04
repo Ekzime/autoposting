@@ -11,7 +11,7 @@ from sqlalchemy.orm import (
     relationship,
     sessionmaker
 )
-from sqlalchemy.types import String, Text, DateTime, Integer, JSON, Boolean
+from sqlalchemy.types import String, Text, DateTime, Integer, JSON, Boolean, BigInteger
 
 # Импорты для работы с перечислениями
 import enum
@@ -92,7 +92,7 @@ class Channels(BaseModel):
     __tablename__ = "channels"
 
     id:       Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True) # Уникальный идентификатор
-    peer_id:  Mapped[int] = mapped_column(Integer, unique=True, nullable=True) # ID канала в Telegram
+    peer_id:  Mapped[int] = mapped_column(BigInteger, unique=True, nullable=True) # ID канала в Telegram
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=True) # Имя пользователя канала
     title:    Mapped[str] = mapped_column(String(255), nullable=False) # Название канала
     
@@ -109,7 +109,7 @@ class Messages(BaseModel):
     __table_args__ = (UniqueConstraint("message_id", "channel_id", name="uq_message_channel"),) # Обеспечивает уникальность комбинации message_id и channel_id
 
     id:         Mapped[int]               = mapped_column(Integer, primary_key=True, autoincrement=True)  # Уникальный идентификатор
-    channel_id: Mapped[int]               = mapped_column(Integer, ForeignKey("channels.peer_id"), nullable=False)  # Внешний ключ на канал
+    channel_id: Mapped[int]               = mapped_column(BigInteger, ForeignKey("channels.peer_id"), nullable=False)  # Внешний ключ на канал
     message_id: Mapped[int]               = mapped_column(Integer, nullable=False)  # ID сообщения в Telegram
     text:       Mapped[str | None]        = mapped_column(Text, nullable=True)     # Текст сообщения
     length:     Mapped[int]               = mapped_column(Integer, nullable=False)  # Длина сообщения
