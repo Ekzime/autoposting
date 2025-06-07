@@ -162,8 +162,7 @@ async def post_message_to_telegram(
                 chat_id=chat_id_for_send,
                 photo=photo,
                 caption=text_to_post + create_promotional_block(),
-                parse_mode="HTML",
-                disable_web_page_preview=True # отключаем превью ссылок в сообщении
+                parse_mode="HTML"
             )
         else:
             # Отправляем сообщение без фото
@@ -172,7 +171,8 @@ async def post_message_to_telegram(
             await bot.send_message(
                 chat_id=chat_id_for_send, 
                 text=text_to_post + create_promotional_block(),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                disable_web_page_preview=settings.telegram_bot.disable_link_preview
             )
             
         logging.info(f"ID {message_db_id}: Сообщение УСПЕШНО отправлено в Telegram канал '{chat_id_for_send}'.")

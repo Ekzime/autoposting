@@ -54,6 +54,17 @@ class NewsStatus(enum.Enum):
     ERROR_POSTING = "error_posting"
     ERROR_PERMANENT = "error_permanent"
 
+class AdminSession(BaseModel):
+    __tablename__ = "admin_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)  # Telegram ID админа
+    username: Mapped[str] = mapped_column(String(100), nullable=True)  # Username админа
+    session_token: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_activity: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class ParsingSourceChannel(BaseModel):
     __tablename__ = "parsing_source_channels"

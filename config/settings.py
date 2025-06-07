@@ -27,6 +27,17 @@ class TelegramBotSettings(BaseModel):
     promo_news_text: str = "Новости."  # Текст для новостного канала
     promo_news_url: str = "https://t.me/+T2sxJEJj2343Y2Ji"  # URL новостного канала
     
+    # Настройки отображения ссылок
+    disable_link_preview: bool = True  # Отключить превью ссылок в сообщениях
+    
+    # Настройки аутентификации
+    admin_password: str = "admin123"  # Пароль админа (лучше в переменных окружения)
+    session_duration_hours: int = 12  # Длительность сессии в часах
+    jwt_secret: str = "your-secret-key-here"  # Секретный ключ для JWT
+    
+    # Список разрешенных админов (Telegram ID)
+    allowed_admins: list[int] = [123456789, 987654321]  # Ваши Telegram ID
+    
     model_config = ConfigDict(extra="allow")
 
 
@@ -109,7 +120,15 @@ class Settings(BaseSettings):
                 promo_forex_text=os.getenv("PROMO_FOREX_TEXT", "Форекс."),
                 promo_forex_url=os.getenv("PROMO_FOREX_URL", "https://t.me/+cjGt046qe_1kMzFi"),
                 promo_news_text=os.getenv("PROMO_NEWS_TEXT", "Новости."),
-                promo_news_url=os.getenv("PROMO_NEWS_URL", "https://t.me/+T2sxJEJj2343Y2Ji")
+                promo_news_url=os.getenv("PROMO_NEWS_URL", "https://t.me/+T2sxJEJj2343Y2Ji"),
+                # Настройки отображения ссылок
+                disable_link_preview=os.getenv("DISABLE_LINK_PREVIEW", "true").lower() in ("true", "1", "yes"),
+                # Настройки аутентификации
+                admin_password=os.getenv("ADMIN_PASSWORD", "admin123"),
+                session_duration_hours=int(os.getenv("SESSION_DURATION_HOURS", 12)),
+                jwt_secret=os.getenv("JWT_SECRET", "your-secret-key-here"),
+                # Список разрешенных админов (Telegram ID)
+                allowed_admins=[int(id) for id in os.getenv("ALLOWED_ADMINS", "123456789,987654321").split(",")]
             )
             
             # API настройки Telegram
