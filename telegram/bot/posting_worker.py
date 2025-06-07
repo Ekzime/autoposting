@@ -162,7 +162,8 @@ async def post_message_to_telegram(
                 chat_id=chat_id_for_send,
                 photo=photo,
                 caption=text_to_post + create_promotional_block(),
-                parse_mode="HTML"
+                parse_mode="HTML",
+                disable_web_page_preview=True # отключаем превью ссылок в сообщении
             )
         else:
             # Отправляем сообщение без фото
