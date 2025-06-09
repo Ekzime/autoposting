@@ -19,7 +19,7 @@ class AuthService:
         payload = {
             'user_id': user_id,
             'username': username,
-            'issued_at': datetime.utcnow(),
+            'issued_at': datetime.utcnow().isoformat(),
             'expires_at': (datetime.utcnow() + timedelta(hours=settings.telegram_bot.session_duration_hours)).timestamp()
         }
 
@@ -36,7 +36,7 @@ class AuthService:
     @staticmethod
     def is_admin_allowed(user_id:int) -> bool:
         """проверяет, разрешен ли этот пользователь как администратор"""
-        return user_id in settings.telegram_bot.admin_ids
+        return user_id in settings.telegram_bot.allowed_admins
     
     @staticmethod
     def create_session(user_id: int, username: str) -> Optional[str]:
@@ -53,7 +53,8 @@ class AuthService:
 
                 new_session = AdminSession(
                     user_id=user_id,
-                    token=token,
+                    username=username,
+                    session_token=token,
                     expires_at=expires_at
                 )
                 session.add(new_session)
@@ -87,5 +88,41 @@ class AuthService:
         except Exception as e:
             logger.error(f"Ошибка при проверке сессии администратора: {e}")
             return False
-        
+    
+    @staticmethod
+    def logout_session(user_id: int) -> bool:
+        """Завершает сессию пользователя"""
+        try:
+            with SessionLocal() as session:
+                result = session.execute(
+                    update(AdminSession)
+                    .where(AdminSession.user_id == user_id)
+                    .values(is_active=False)
+                )
+                session.commit()
+                
+                logger.info(f"Сессия пользователя {user_id} завершена")
+                return result.rowcount > 0
+                
+        except Exception as e:
+            logger.error(f"Ошибка при завершении сессии: {e}")
+            return False
+    
+    @staticmethod
+    def cleanup_expired_sessions():
+        """Удаляет истекшие сессии"""
+        try:
+            with SessionLocal() as session:
+                result = session.execute(
+                    delete(AdminSession).where(
+                        AdminSession.expires_at < datetime.utcnow()
+                    )
+                )
+                session.commit()
+                
+                if result.rowcount > 0:
+                    logger.info(f"Удалено {result.rowcount} истекших сессий")
+                    
+        except Exception as e:
+            logger.error(f"Ошибка при очистке сессий: {e}")
     

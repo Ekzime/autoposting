@@ -5,6 +5,8 @@ import logging
 from aiogram import Dispatcher, Bot
 from aiogram.fsm.storage.memory import MemoryStorage
 
+from telegram.bot.middleware.auth_middleware import AuthMiddleware
+from telegram.bot.handlers.auth_handlers import router as auth_router
 from telegram.bot.handlers.target_chanels_handlers import router as target_router
 from telegram.bot.handlers.source_chanels_handlers import router as source_router
 from telegram.bot.handlers.telethon_handlers import router as telethon_router
@@ -58,9 +60,14 @@ async def main():
         bot = Bot(token=bot_token)
         dp = Dispatcher(storage=MemoryStorage())
         
-        # Регистрация обработчиков
+        # Подключаем middleware аутентификации
+        logger.info("Подключение middleware аутентификации")
+        dp.message.middleware(AuthMiddleware())
+        dp.callback_query.middleware(AuthMiddleware())
+        
         logger.info("Регистрация обработчиков")
-        dp.include_router(help_router)  # Регистрируем первым, чтобы команды помощи имели приоритет
+        dp.include_router(auth_router)  # ПЕРВЫМ для команд авторизации
+        dp.include_router(help_router)
         dp.include_router(target_router)
         dp.include_router(source_router)
         dp.include_router(telethon_router)

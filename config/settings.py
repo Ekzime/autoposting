@@ -1,13 +1,13 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import os
-from pydantic import BaseModel, Field, validator, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
 from pydantic_settings import BaseSettings
 
 
 class AIServiceSettings(BaseModel):
     """Настройки сервиса искусственного интеллекта"""
     gemini_key: str  # Ключ API для Gemini
-    api_url: str = Field(..., description="URL API искусственного интеллекта для фильтрации")
+    api_url: str = Field(default="", description="URL API искусственного интеллекта для фильтрации")
     
     model_config = ConfigDict(extra="allow")
 
@@ -31,12 +31,10 @@ class TelegramBotSettings(BaseModel):
     disable_link_preview: bool = True  # Отключить превью ссылок в сообщениях
     
     # Настройки аутентификации
-    admin_password: str = "admin123"  # Пароль админа (лучше в переменных окружения)
-    session_duration_hours: int = 12  # Длительность сессии в часах
-    jwt_secret: str = "your-secret-key-here"  # Секретный ключ для JWT
-    
-    # Список разрешенных админов (Telegram ID)
-    allowed_admins: list[int] = [123456789, 987654321]  # Ваши Telegram ID
+    admin_password: str  # Пароль админа
+    session_duration_hours: int  # Длительность сессии в часах
+    jwt_secret: str  # Секретный ключ для JWT
+    allowed_admins: List[int]  # Список разрешенных админов (Telegram ID)
     
     model_config = ConfigDict(extra="allow")
 
@@ -76,8 +74,7 @@ class Settings(BaseSettings):
     model_config = ConfigDict(
         extra="allow",
         env_file='.env',  # Файл с переменными окружения
-        env_file_encoding='utf-8',  # Кодировка файла
-        env_nested_delimiter='__'  # Разделитель для вложенных настроек
+        env_file_encoding='utf-8'  # Кодировка файла
     )
     
     @classmethod
@@ -125,10 +122,10 @@ class Settings(BaseSettings):
                 disable_link_preview=os.getenv("DISABLE_LINK_PREVIEW", "true").lower() in ("true", "1", "yes"),
                 # Настройки аутентификации
                 admin_password=os.getenv("ADMIN_PASSWORD", "admin123"),
-                session_duration_hours=int(os.getenv("SESSION_DURATION_HOURS", 12)),
+                session_duration_hours=int(os.getenv("SESSION_DURATION_HOURS", "12")),
                 jwt_secret=os.getenv("JWT_SECRET", "your-secret-key-here"),
                 # Список разрешенных админов (Telegram ID)
-                allowed_admins=[int(id) for id in os.getenv("ALLOWED_ADMINS", "123456789,987654321").split(",")]
+                allowed_admins=[int(id.strip()) for id in os.getenv("ALLOWED_ADMINS", "123456789").split(",") if id.strip()]
             )
             
             # API настройки Telegram
@@ -174,7 +171,13 @@ except Exception as e:
     # Создаем минимальный объект для избежания ошибок импорта
     settings = Settings(
         ai_service=AIServiceSettings(gemini_key="", api_url=""),
-        telegram_bot=TelegramBotSettings(bot_token=""),
+        telegram_bot=TelegramBotSettings(
+            bot_token="",
+            admin_password="admin123",
+            session_duration_hours=12,
+            jwt_secret="your-secret-key-here",
+            allowed_admins=[int(id.strip()) for id in os.getenv("ALLOWED_ADMINS", "123456789").split(",") if id.strip()]
+        ),
         telegram_api=TelegramApiSettings(api_id=0, api_hash=""),
         telegram_parser=TelegramParserSettings(session="", photo_storage="database/photos"),
         database=DatabaseSettings(connect_string="")
