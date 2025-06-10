@@ -50,6 +50,7 @@ class DeactivateTargetState(StatesGroup):
 class DeleteTargetState(StatesGroup):
     """Состояния для процесса удаления целевого канала"""
     waiting_for_target_id_str = State()
+    waiting_for_confirmation = State()
 
 class ActivateTargetState(StatesGroup):
     """Состояния для процесса активации целевого канала"""
@@ -739,7 +740,7 @@ async def process_update_target_id(message: Message, state: FSMContext):
     exists, target_info = await asyncio.to_thread(_check_target_exists)
     
     if not exists:
-        await message.answer(f"Канал с ID {target_id} не найден. Пожалуйста, введите корректный ID:")
+        await message.answer(f"❌ Канал с ID {target_id} не найден. Пожалуйста, введите корректный ID:")
         return
     
     # Сохраняем информацию о канале
@@ -980,4 +981,265 @@ async def cmd_check_fix_channels(message: Message):
         report.append("\n<b>🔔 Рекомендация:</b> Проверьте работу каналов, ID которых были исправлены, отправив тестовое сообщение.")
     
     await message.answer("\n\n".join(report), parse_mode="HTML")
+
+#######################################################################
+#                                                                     #
+#                    Deactivate Target Channel                        #
+#                                                                     #
+#######################################################################
+@router.message(Command("deactivate_target"))
+async def cmd_deactivate_target(message: Message, state: FSMContext):
+    """
+    Обработчик команды /deactivate_target для деактивации целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Получает список всех активных целевых каналов из БД
+    2. Если список пустой - отправляет сообщение об отсутствии каналов
+    3. Формирует сообщение с запросом выбора канала для деактивации
+    4. Устанавливает состояние ожидания ID канала
+    """
+    def _get_active_targets_sync():
+        return [target for target in pt_repo.get_all_target_channels() if target['is_active']]
+    
+    active_target_channels = await asyncio.to_thread(_get_active_targets_sync)
+    if not active_target_channels:
+        await message.answer("❌ Нет активных целевых каналов для деактивации.")
+        return
+    
+    channels_list = ["<b>🔴 Выберите канал для деактивации:</b>"]
+    for channel in active_target_channels:
+        channels_list.append(f"ID: <code>{channel['id']}</code> - {channel['target_title']}")
+    
+    await message.answer("\n".join(channels_list), parse_mode="HTML")
+    await message.answer("Введите ID канала для деактивации:")
+    await state.set_state(DeactivateTargetState.waiting_for_target_id_str)
+
+
+@router.message(DeactivateTargetState.waiting_for_target_id_str)
+async def process_deactivate_target_id(message: Message, state: FSMContext):
+    """
+    Обработчик для получения ID канала для деактивации.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Проверяет корректность введенного ID канала
+    2. Деактивирует указанный канал
+    3. Отправляет результат операции
+    4. Очищает состояние FSM
+    """
+    target_id = message.text.strip()
+    
+    if not target_id.isdigit():
+        await message.answer("ID канала должен быть числом. Пожалуйста, введите корректный ID:")
+        return
+    
+    # Проверяем существование канала и его статус
+    def _check_target_exists():
+        all_targets = pt_repo.get_all_target_channels()
+        for target in all_targets:
+            if str(target['id']) == target_id:
+                return True, target
+        return False, None
+    
+    exists, target_info = await asyncio.to_thread(_check_target_exists)
+    
+    if not exists:
+        await message.answer(f"❌ Канал с ID {target_id} не найден. Пожалуйста, введите корректный ID:")
+        return
+    
+    if not target_info['is_active']:
+        await message.answer(f"❌ Канал <b>{target_info['target_title']}</b> уже деактивирован.", parse_mode="HTML")
+        await state.clear()
+        return
+    
+    # Деактивируем канал
+    def _deactivate_target():
+        return pt_repo.deactivate_target_by_id(target_info['target_chat_id'])
+    
+    try:
+        success = await asyncio.to_thread(_deactivate_target)
+        
+        if success:
+            await message.answer(
+                f"✅ Канал <b>{target_info['target_title']}</b> успешно деактивирован.",
+                parse_mode="HTML"
+            )
+            logger.info(f"Канал {target_info['target_title']} ({target_info['target_chat_id']}) деактивирован")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info(f"Отправлен сигнал обновления настроек постинга после деактивации канала")
+        else:
+            await message.answer(f"❌ Не удалось деактивировать канал {target_info['target_title']}.")
+    
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при деактивации канала: {str(e)}")
+        logger.error(f"Ошибка при деактивации канала: {e}")
+    
+    finally:
+        await state.clear()
+
+
+#######################################################################
+#                                                                     #
+#                    Delete Target Channel                            #
+#                                                                     #
+#######################################################################
+@router.message(Command("delete_target"))
+async def cmd_delete_target(message: Message, state: FSMContext):
+    """
+    Обработчик команды /delete_target для удаления целевого канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Получает список всех целевых каналов из БД
+    2. Если список пустой - отправляет сообщение об отсутствии каналов
+    3. Формирует сообщение с запросом выбора канала для удаления
+    4. Устанавливает состояние ожидания ID канала
+    """
+    def _get_all_targets_sync():
+        return pt_repo.get_all_target_channels()
+    
+    all_target_channels = await asyncio.to_thread(_get_all_targets_sync)
+    if not all_target_channels:
+        await message.answer("❌ Целевых каналов нет. Используйте /add_target, чтобы добавить канал.")
+        return
+    
+    channels_list = ["<b>🗑️ Выберите канал для удаления:</b>"]
+    for channel in all_target_channels:
+        status = "✅ Активен" if channel['is_active'] else "❌ Неактивен"
+        channels_list.append(f"ID: <code>{channel['id']}</code> - {channel['target_title']} ({status})")
+    
+    await message.answer("\n".join(channels_list), parse_mode="HTML")
+    await message.answer("⚠️ <b>ВНИМАНИЕ:</b> Удаление канала необратимо!\nВведите ID канала для удаления:", parse_mode="HTML")
+    await state.set_state(DeleteTargetState.waiting_for_target_id_str)
+
+
+@router.message(DeleteTargetState.waiting_for_target_id_str)
+async def process_delete_target_id(message: Message, state: FSMContext):
+    """
+    Обработчик для получения ID канала для удаления.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+        
+    Действия:
+    1. Проверяет корректность введенного ID канала
+    2. Запрашивает подтверждение удаления
+    3. При подтверждении удаляет указанный канал
+    4. Отправляет результат операции
+    5. Очищает состояние FSM
+    """
+    user_input = message.text.strip()
+    
+    # Проверяем на команду отмены
+    if user_input.lower() in ['отмена', 'cancel', '/cancel']:
+        await message.answer("❌ Удаление отменено.")
+        await state.clear()
+        return
+    
+    target_id = user_input
+    
+    if not target_id.isdigit():
+        await message.answer("ID канала должен быть числом. Пожалуйста, введите корректный ID или 'отмена' для отмены:")
+        return
+    
+    # Проверяем существование канала
+    def _check_target_exists():
+        all_targets = pt_repo.get_all_target_channels()
+        for target in all_targets:
+            if str(target['id']) == target_id:
+                return True, target
+        return False, None
+    
+    exists, target_info = await asyncio.to_thread(_check_target_exists)
+    
+    if not exists:
+        await message.answer(f"❌ Канал с ID {target_id} не найден. Пожалуйста, введите корректный ID:")
+        return
+    
+    # Запрашиваем подтверждение
+    confirmation_text = (
+        f"⚠️ <b>ПОДТВЕРЖДЕНИЕ УДАЛЕНИЯ</b>\n\n"
+        f"Вы действительно хотите удалить канал:\n"
+        f"<b>{target_info['target_title']}</b>\n"
+        f"ID: <code>{target_info['target_chat_id']}</code>\n\n"
+        f"❗ Это действие необратимо!\n\n"
+        f"Для подтверждения напишите: <code>УДАЛИТЬ</code>\n"
+        f"Для отмены напишите: <code>отмена</code>"
+    )
+    
+    await message.answer(confirmation_text, parse_mode="HTML")
+    
+    # Сохраняем информацию о канале для следующего шага
+    await state.update_data(target_info=target_info)
+    await state.set_state(DeleteTargetState.waiting_for_confirmation)
+
+
+@router.message(DeleteTargetState.waiting_for_confirmation)
+async def process_delete_target_confirmation(message: Message, state: FSMContext):
+    """
+    Обработчик подтверждения удаления канала.
+    
+    Args:
+        message (Message): Объект сообщения от пользователя
+        state (FSMContext): Контекст состояния FSM
+    """
+    user_input = message.text.strip()
+    
+    if user_input.lower() in ['отмена', 'cancel', '/cancel']:
+        await message.answer("❌ Удаление отменено.")
+        await state.clear()
+        return
+    
+    if user_input != "УДАЛИТЬ":
+        await message.answer("❌ Неверное подтверждение. Напишите точно <code>УДАЛИТЬ</code> или <code>отмена</code>:", parse_mode="HTML")
+        return
+    
+    # Получаем данные из состояния
+    data = await state.get_data()
+    target_info = data.get("target_info")
+    
+    if not target_info:
+        await message.answer("❌ Произошла ошибка: данные о канале потеряны. Пожалуйста, начните заново.")
+        await state.clear()
+        return
+    
+    # Удаляем канал
+    def _delete_target():
+        return pt_repo.delete_target_channel(target_info['target_chat_id'])
+    
+    try:
+        success = await asyncio.to_thread(_delete_target)
+        
+        if success:
+            await message.answer(
+                f"✅ Канал <b>{target_info['target_title']}</b> успешно удален из системы.",
+                parse_mode="HTML"
+            )
+            logger.info(f"Канал {target_info['target_title']} ({target_info['target_chat_id']}) удален")
+            
+            # Запускаем обновление настроек постинга
+            trigger_posting_settings_update()
+            logger.info(f"Отправлен сигнал обновления настроек постинга после удаления канала")
+        else:
+            await message.answer(f"❌ Не удалось удалить канал {target_info['target_title']}.")
+    
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при удалении канала: {str(e)}")
+        logger.error(f"Ошибка при удалении канала: {e}")
+    
+    finally:
+        await state.clear()
 
