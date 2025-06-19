@@ -1,0 +1,118 @@
+version: '3.8'
+
+services:
+  # MySQL база данных (как у вас локально)
+  mysql:
+    image: mysql:8.0
+    container_name: autoposting_mysql
+    environment:
+      MYSQL_DATABASE: parser.db
+      MYSQL_ROOT_PASSWORD: autoposting_root_password_123
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - autoposting_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # AI сервис (FastAPI + Gemini)
+  ai-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ai
+    container_name: autoposting_ai
+    environment:
+      GEMINI_KEY: ${GEMINI_KEY}
+    ports:
+      - "8000:8000"
+    networks:
+      - autoposting_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Основное приложение (бот + парсер + постинг)
+  main-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.main
+    container_name: autoposting_main
+    environment:
+      # База данных - ЗАХАРДКОЖЕНО, всегда одинаково в Docker
+      DB_CONNECT_STRING: mysql+pymysql://root:autoposting_root_password_123@mysql:3306/parser.db
+      
+      # AI сервис - ЗАХАРДКОЖЕНО
+      AI_API_URL: http://ai-service:8000/gemini/filter
+      GEMINI_KEY: ${GEMINI_KEY}
+      
+      # Telegram API
+      API_ID: ${API_ID}
+      API_HASH: ${API_HASH}
+      
+      # Telegram Bot
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_TOKEN_MAIN: ${TELEGRAM_BOT_TOKEN_MAIN}
+      
+      # Telegram Parser
+      PHONE_NUMBER: ${PHONE_NUMBER}
+      SESSION: ${SESSION}
+      PHOTO_STORAGE: /app/database/photos
+      
+      # Админка
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      SESSION_DURATION_HOURS: ${SESSION_DURATION_HOURS}
+      ALLOWED_ADMINS: ${ALLOWED_ADMINS}
+      
+      # Промо настройки
+      PROMO_ENABLED: ${PROMO_ENABLED}
+      PROMO_TITLE: ${PROMO_TITLE}
+      PROMO_CRYPTO_TEXT: ${PROMO_CRYPTO_TEXT}
+      PROMO_CRYPTO_URL: ${PROMO_CRYPTO_URL}
+      PROMO_FOREX_TEXT: ${PROMO_FOREX_TEXT}
+      PROMO_FOREX_URL: ${PROMO_FOREX_URL}
+      PROMO_NEWS_TEXT: ${PROMO_NEWS_TEXT}
+      PROMO_NEWS_URL: ${PROMO_NEWS_URL}
+      DISABLE_LINK_PREVIEW: ${DISABLE_LINK_PREVIEW}
+      
+    volumes:
+      - photos_data:/app/database/photos
+      - logs_data:/app/logs
+      - sessions_data:/app/sessions
+      # Монтируем .session файлы напрямую
+      - ../temp_session_380956341569.session:/app/temp_session_380956341569.session:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    networks:
+      - autoposting_network
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+volumes:
+  mysql_data:
+    driver: local
+  photos_data:
+    driver: local
+  logs_data:
+    driver: local
+  sessions_data:
+    driver: local
+
+networks:
+  autoposting_network:
+    driver: bridge
