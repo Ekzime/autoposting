@@ -48,6 +48,15 @@ docker-compose down
 
 # запуск
 docker-compose up -d
+
+# Останови все
+docker-compose down
+
+# Удали все образы проекта
+docker rmi autoposting_main-app autoposting_ai-service
+
+# Пересобери все
+docker-compose build --no-cache
 ```
 
 ## 📊 Что запускается
