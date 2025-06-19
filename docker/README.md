@@ -44,6 +44,9 @@ docker-compose restart
 
 # Остановка  
 docker-compose down
+
+# запуск
+docker-compose up -d
 ```
 
 ## 📊 Что запускается
