@@ -13,6 +13,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Дополнительно устанавливаем cryptography для MySQL 8.0
+RUN pip install --no-cache-dir cryptography
+
 # Копируем весь проект
 COPY . .
 
