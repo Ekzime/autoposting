@@ -4,9 +4,7 @@
 
 ### 1. Скопируйте проект на сервер
 ```bash
-scp -r autoposting/ user@your-server:/home/user/
-ssh user@your-server
-cd /home/user/autoposting/docker
+git clone # вставьте ссылку на репо
 ```
 
 ### 2. Настройте переменные
@@ -17,6 +15,9 @@ nano .env  # Заполните ваши ключи!
 
 ### 3. Запустите
 ```bash
+# выдать права
+chmod +x ./deploy.sh
+# запустить
 ./deploy.sh
 ```
 
